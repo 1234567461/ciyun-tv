@@ -327,6 +327,35 @@ async function mkAdmin() {
     parentalEnabled: true, childMaxRating: 'PG13', childBlockVip: true, childBlockComment: true,
   });
 
+  /* ---------- 14. 家庭额度池 × 播放网关联动 ---------- */
+  sec('【14】家庭额度池 × 播放网关联动（单元级）');
+  {
+    const st = require('../lib/store');
+    const pv = require('../lib/pay');
+    const S = st.store;
+    const RR = 'it' + Date.now().toString(36).slice(-4);
+    S.upsertUser({ account: RR + 'o', nickname: 'o', password: 'x', tokens: [], balance: 0, quota: { times: 0, points: 0 } });
+    S.upsertUser({ account: RR + 'm', nickname: 'm', password: 'x', tokens: [], balance: 0, quota: { times: 0, points: 0 } });
+    const sf = S.createFamily(RR + 'o', '池联动');
+    S.addFamilyMember(sf.id, RR + 'm', 'member');
+    S.updateFamily(sf.id, { quotaPool: 3, poolUsed: 0 });
+    const c2 = { ...S.settings.monetize, enabled: true, quotaEnabled: true, freeDailyPlays: 0, allowPointsForPlay: false, costPerPlay: 1 };
+    const g = pv.gateWatch(S.findUser(RR + 'm'), { guid: 'ITG1', cfg: c2, isVip: false, isAdmin: false });
+    ok('额度耗尽时被拦截', g.allow === false && g.needRecharge === true);
+    ok('拦截分支带出应扣成本 cost>0', g.cost > 0, g.cost);
+    const r1 = S.useFamilyQuota(sf.id, g.cost);
+    ok('家庭池第 1 次扣减成功', r1 === 1, r1);
+    S.useFamilyQuota(sf.id, g.cost);
+    S.useFamilyQuota(sf.id, g.cost);
+    const fnow = S.getFamily(sf.id);
+    ok('池用满后 remain=0', fnow.quotaPool - fnow.poolUsed === 0, fnow);
+    ok('池空后再扣返回 0', S.useFamilyQuota(sf.id, g.cost) === 0);
+    S.updateFamily(sf.id, { quotaPool: -1, poolUsed: 0 });
+    ok('无限池(-1)返回 -1', S.useFamilyQuota(sf.id, 5) === -1);
+    // 清理
+    S.deleteFamily(sf.id);
+  }
+
   console.log('\n' + '='.repeat(46));
   console.log(`通过 ${pass} 项，失败 ${fail} 项`);
   if (fail) { console.log('失败项：'); fails.forEach((f) => console.log('  · ' + f)); }

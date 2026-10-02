@@ -23,6 +23,7 @@ const stream = require('./lib/stream');
 const sources = require('./lib/sources');
 const account = require('./lib/account');
 const chat = require('./lib/chat');
+const pay = require('./lib/pay');
 const { store } = require('./lib/store');
 
 const app = express();
@@ -55,7 +56,21 @@ app.get('/api/site', (req, res) => {
     theme: s.theme,
     announcement: s.announcement,
     showAds: s.showAds,
-    monetize: { enabled: s.monetize.enabled, plans: s.monetize.plans },
+    monetize: {
+      enabled: !!s.monetize.enabled,
+      mode: s.monetize.mode || 'optional',
+      currency: s.monetize.currency || '¥',
+      provider: s.monetize.provider || 'mock',
+      testMode: s.monetize.testMode !== false,
+      allowBalance: s.monetize.allowBalance !== false,
+      redeemEnabled: s.monetize.redeemEnabled !== false,
+      adminUnlimited: s.monetize.adminUnlimited !== false,
+      minRecharge: s.monetize.minRecharge || 1,
+      rechargePresets: s.monetize.rechargePresets || [10, 30, 50, 100, 200, 500],
+      orderTimeout: s.monetize.orderTimeout || 30,
+      payMethods: pay.payMethods(s.monetize),
+      plans: s.monetize.plans || [],
+    },
     playback: s.playback,
     community: {
       enabled: s.community.enabled !== false,
@@ -488,6 +503,27 @@ app.post('/api/admin/login', (req, res) => {
   }
   const token = crypto.randomBytes(24).toString('hex');
   store.setSession(token, { role: 'admin', user: username });
+  // 同步一个同名用户端账号，让管理员在用户端也享有终身会员与无限额度
+  try {
+    if ((store.settings.monetize || {}).adminUnlimited !== false) {
+      let u = store.findUser(username);
+      if (!u) {
+        u = {
+          account: username,
+          nickname: '站务管理员',
+          password: account.hashPassword(password),
+          email: '', avatar: '', bio: '',
+          createdAt: Date.now(), lastLogin: Date.now(),
+          status: 'active', tokens: [], balance: 0,
+          role: 'admin',
+        };
+        store.upsertUser(u);
+      } else if (u.role !== 'admin') {
+        u.role = 'admin';
+        store.upsertUser(u);
+      }
+    }
+  } catch (e) { /* 忽略，不影响后台登录 */ }
   res.cookie('cy_token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 86400000 });
   res.json({ ok: true, token });
 });
@@ -570,13 +606,6 @@ app.get('/api/admin/health', requireAdmin, async (req, res) => {
   res.json({ stats: cctv.health.snapshot() });
 });
 
-/** 会员套餐设置（付费模块，默认关闭） */
-app.put('/api/admin/monetize', requireAdmin, (req, res) => {
-  const { enabled, plans } = req.body || {};
-  store.setSettings({ monetize: { enabled: !!enabled, plans: plans || store.settings.monetize.plans } });
-  res.json(store.settings.monetize);
-});
-
 /** 社区设置（注册 / 评论） */
 app.put('/api/admin/community', requireAdmin, (req, res) => {
   const b = req.body || {};
@@ -613,15 +642,6 @@ app.delete('/api/admin/families/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/admin/orders', requireAdmin, (req, res) => {
-  res.json({ orders: store.getOrders() });
-});
-app.put('/api/admin/orders/:id', requireAdmin, (req, res) => {
-  const o = store.updateOrder(req.params.id, req.body || {});
-  if (!o) return res.status(404).json({ error: 'not found' });
-  res.json(o);
-});
-
 /** 配置导入导出 */
 app.get('/api/admin/export', requireAdmin, (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="ciyun-config.json"');
@@ -655,9 +675,31 @@ function clientToken(req, name) {
   return null;
 }
 
+/** 管理员默认账号（享有会员身份与无限额度） */
+function isAdminAccount(account) {
+  if (!account) return false;
+  const s = store.settings || {};
+  if (s.monetize && s.monetize.adminUnlimited === false) return false;
+  return String(account) === String(s.adminUsername || 'admin');
+}
+
+/** 管理员特权视图（会员 + 无限额度） */
+const ADMIN_PRIVILEGE = {
+  level: 'admin',
+  name: '管理员（终身会员）',
+  expire: 4102444800000,      // 2100-01-01，视作永久
+  since: 0,
+  lastPlan: 'admin',
+  permanent: true,
+};
+
 /** 用户信息脱敏输出 */
 function publicUser(u) {
   if (!u) return null;
+  const cfg = store.settings.monetize || {};
+  const now = Date.now();
+  const isAdm = isAdminAccount(u.account);
+  const own = (u.vip && u.vip.expire > now) || isAdm;
   return {
     account: u.account,
     nickname: u.nickname || u.account,
@@ -665,7 +707,15 @@ function publicUser(u) {
     avatar: u.avatar || '',
     bio: u.bio || '',
     createdAt: u.createdAt || 0,
-    vip: u.vip || null,
+    vip: isAdm ? ADMIN_PRIVILEGE : (u.vip || null),
+    vipActive: !!own,
+    vipDaysLeft: isAdm ? 36500 : (own ? Math.ceil((u.vip.expire - now) / 86400000) : 0),
+    isAdmin: isAdm,
+    adminPrivilege: isAdm,
+    unlimited: isAdm,
+    quota: isAdm ? 'unlimited' : null,
+    balance: isAdm ? null : Math.round(((u.balance || 0)) * 100) / 100,
+    currency: cfg.currency || '¥',
     stats: {
       comments: (store.getComments().filter((c) => c.account === u.account && c.status !== 'deleted') || []).length,
     },
@@ -961,7 +1011,9 @@ app.get('/api/admin/users', requireAdmin, (req, res) => {
     createdAt: u.createdAt,
     lastLogin: u.lastLogin,
     status: u.status || 'active',
-    vip: u.vip,
+    vip: isAdminAccount(u.account) ? ADMIN_PRIVILEGE : u.vip,
+    isAdmin: isAdminAccount(u.account),
+    unlimited: isAdminAccount(u.account),
     comments: store.getComments().filter((c) => c.account === u.account && c.status !== 'deleted').length,
   }));
   res.json({ users });
@@ -1029,39 +1081,568 @@ app.delete('/api/admin/comments/:id', requireAdmin, (req, res) => {
 });
 
 /* ============================================================
- * 会员：下单与支付（可选模块，默认关闭）
+ * 会员付费 · 钱包 · 兑换码（可选模块，默认关闭）
+ * ------------------------------------------------------------
+ * 设计理念：可付费可不付费
+ *   · mode = 'optional'：自愿赞助制，不付费也能完整使用（仅少些增值权益）
+ *   · mode = 'required'：权益制，部分增值功能需会员
+ * 核心影视观看永远免费，付费只对应增值服务。
  * ============================================================ */
-app.post('/api/user/order', (req, res) => {
-  const s = store.settings;
-  if (!s.monetize.enabled) return res.status(403).json({ error: '付费模块未开启' });
-  const { planId } = req.body || {};
-  const plan = (s.monetize.plans || []).find((p) => p.id === planId);
-  if (!plan) return res.status(404).json({ error: '套餐不存在' });
+
+/** 站点根地址（用于拼接回调地址） */
+function siteBaseUrl(req) {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+/** 金额规整到 2 位小数 */
+function money(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+/** 会员视图（含剩余天数） */
+function vipView(u) {
+  const cfg = store.settings.monetize || {};
+  const isAdm = u && isAdminAccount(u.account);
+  if (isAdm) {
+    return {
+      active: true,
+      isAdmin: true,
+      privilege: true,
+      unlimited: true,
+      source: 'admin',
+      level: 'admin',
+      name: '管理员（终身会员 · 无限额度）',
+      expire: null,
+      daysLeft: 36500,
+      since: 0,
+      balance: null,
+      quota: 'unlimited',
+      currency: cfg.currency || '¥',
+      mode: cfg.mode || 'optional',
+    };
+  }
+  const own = u && u.vip && u.vip.expire > Date.now();
+  const fam = u ? store.findFamilyOf(u.account) : null;
+  let shared = false;
+  if (!own && u && fam && fam.owner !== u.account && (store.settings.family || {}).shareVip !== false) {
+    const owner = store.findUser(fam.owner);
+    shared = !!(owner && owner.vip && owner.vip.expire > Date.now());
+  }
+  const active = own || shared;
+  return {
+    active,
+    source: own ? 'own' : shared ? 'family' : null,
+    level: own ? u.vip.level : shared ? 'family' : null,
+    name: own ? u.vip.name || '会员' : shared ? '家庭共享会员' : null,
+    expire: own ? u.vip.expire : null,
+    daysLeft: own ? pay.vipDaysLeft(u) : 0,
+    since: own ? u.vip.since || null : null,
+    balance: money((u && u.balance) || 0),
+    currency: cfg.currency || '¥',
+    mode: cfg.mode || 'optional',
+  };
+}
+
+/** 会员中心信息 */
+app.get('/api/vip/info', (req, res) => {
+  const cfg = store.settings.monetize || {};
   const u = currentUser(req);
-  const order = store.addOrder({
-    planId: plan.id,
-    planName: plan.name,
-    amount: plan.price,
-    status: 'pending',
-    account: u ? u.account : 'guest',
+  res.json({
+    enabled: !!cfg.enabled,
+    mode: cfg.mode || 'optional',
+    currency: cfg.currency || '¥',
+    provider: cfg.provider || 'mock',
+    testMode: cfg.testMode !== false,
+    allowBalance: cfg.allowBalance !== false,
+    redeemEnabled: cfg.redeemEnabled !== false,
+    adminUnlimited: cfg.adminUnlimited !== false,
+    minRecharge: cfg.minRecharge || 1,
+    rechargePresets: cfg.rechargePresets || [10, 30, 50, 100, 200, 500],
+    orderTimeout: cfg.orderTimeout || 30,
+    isAdmin: !!(u && isAdminAccount(u.account)),
+    adminNote: u && isAdminAccount(u.account) ? '管理员账号享有终身会员与无限额度' : '',
+    plans: (cfg.plans || []).map((p) => ({
+      ...p,
+      // 省多少钱
+      save: p.originalPrice ? money(p.originalPrice - p.price) : 0,
+      perDay: p.days ? money(p.price / p.days) : 0,
+    })),
+    payMethods: pay.payMethods(cfg),
+    vip: u ? vipView(u) : null,
+    loggedIn: !!u,
   });
-  res.json({ ok: true, order });
 });
 
-/** 模拟支付回调（真实部署可接入支付网关） */
-app.post('/api/pay/callback', (req, res) => {
-  const { orderId } = req.body || {};
-  const o = store.updateOrder(orderId, { status: 'paid', paidAt: Date.now() });
-  if (!o) return res.status(404).json({ error: 'order not found' });
-  const plan = (store.settings.monetize.plans || []).find((p) => p.id === o.planId);
-  if (plan && o.account && o.account !== 'guest') {
-    const u = store.findUser(o.account);
-    if (u) {
-      u.vip = { level: plan.id, expire: Date.now() + plan.days * 86400000 };
-      store.upsertUser(u);
+/** 我的订单 */
+app.get('/api/user/orders', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  store.expireOrders();
+  const list = store.getOrdersOf(u.account, 100).map((o) => ({
+    ...o,
+    expired: o.status === 'pending' && o.expire && o.expire < Date.now(),
+  }));
+  res.json({ list, wallet: { balance: money(u.balance || 0) } });
+});
+
+/** 钱包信息 */
+app.get('/api/user/wallet', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  res.json({
+    balance: money(u.balance || 0),
+    currency: (store.settings.monetize || {}).currency || '¥',
+    log: store.getWalletLog(u.account, 50),
+  });
+});
+
+/**
+ * 下单
+ * body: { type:'vip'|'recharge', planId?, amount?, payMethod?, useBalance? }
+ * - type=vip      : 购买套餐，planId 必填
+ * - type=recharge : 余额充值，amount 必填
+ * - useBalance    : 是否用余额直接支付（仅 type=vip 有效）
+ */
+app.post('/api/vip/order', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  if (!cfg.enabled) return res.status(403).json({ error: '付费模块未开启' });
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录后再操作' });
+
+  const b = req.body || {};
+  const type = b.type === 'recharge' ? 'recharge' : 'vip';
+  const payMethod = String(b.payMethod || 'alipay');
+  const useBalance = !!b.useBalance;
+
+  // ---- 管理员特权：无需下单，直接授予（会员/额度无限） ----
+  if (isAdminAccount(u.account)) {
+    return res.json({
+      ok: true, paid: true, privileged: true,
+      message: '管理员账号享有终身会员与无限额度，无需购买',
+      order: null, vip: vipView(u),
+    });
+  }
+
+  let plan = null;
+  let amount = 0;
+  let planName = '';
+
+  if (type === 'vip') {
+    plan = store.findPlan(b.planId);
+    if (!plan) return res.status(404).json({ error: '套餐不存在或已下架' });
+    amount = money(plan.price);
+    planName = plan.name;
+  } else {
+    if (cfg.allowBalance === false && b.type === 'recharge') {
+      return res.status(403).json({ error: '本站未开启充值功能' });
+    }
+    amount = money(b.amount);
+    const min = Number(cfg.minRecharge) || 1;
+    if (!(amount >= min)) return res.status(400).json({ error: `单次充值不少于 ${cfg.currency || '¥'}${min}` });
+    if (amount > 100000) return res.status(400).json({ error: '单次充值金额过大' });
+    planName = '余额充值';
+  }
+
+  // ---- 余额支付：直接扣款，立即完成 ----
+  if (useBalance && type === 'vip') {
+    if (cfg.allowBalance === false) return res.status(403).json({ error: '本站未开启余额支付' });
+    if ((u.balance || 0) < amount) {
+      return res.status(400).json({ error: '余额不足，请先充值', needRecharge: true, balance: money(u.balance || 0), amount });
+    }
+    const order = store.addOrder({
+      type: 'vip', account: u.account, planId: plan.id, planName: plan.name,
+      amount, payMethod: 'balance', status: 'pending', title: plan.name,
+    });
+    store.addBalance(u.account, -amount);
+    finishOrder(order, { via: 'balance' });
+    return res.json({ ok: true, paid: true, order: store.findOrder(order.id), vip: vipView(store.findUser(u.account)) });
+  }
+
+  // ---- 在线支付：创建待支付订单 ----
+  const order = store.addOrder({
+    id: pay.newOrderNo(),
+    type,
+    account: u.account,
+    planId: plan ? plan.id : null,
+    planName,
+    amount,
+    payMethod,
+    status: 'pending',
+    title: planName,
+  });
+
+  const payment = pay.buildPayment(cfg, order, siteBaseUrl(req));
+  res.json({ ok: true, paid: false, order, payment, vip: vipView(u) });
+});
+
+/** 兼容旧接口：POST /api/user/order 等价于 /api/vip/order（type=vip） */
+app.post('/api/user/order', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  if (!cfg.enabled) return res.status(403).json({ error: '付费模块未开启' });
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录后再操作' });
+  const plan = store.findPlan((req.body || {}).planId);
+  if (!plan) return res.status(404).json({ error: '套餐不存在' });
+  const order = store.addOrder({
+    id: pay.newOrderNo(),
+    type: 'vip',
+    account: u.account,
+    planId: plan.id,
+    planName: plan.name,
+    amount: money(plan.price),
+    payMethod: (req.body || {}).payMethod || 'alipay',
+    status: 'pending',
+    title: plan.name,
+  });
+  const payment = pay.buildPayment(cfg, order, siteBaseUrl(req));
+  res.json({ ok: true, order, payment });
+});
+
+/** 取消订单 */
+app.post('/api/user/order/:id/cancel', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const o = store.findOrder(req.params.id);
+  if (!o) return res.status(404).json({ error: '订单不存在' });
+  if (o.account !== u.account) return res.status(403).json({ error: '无权操作该订单' });
+  if (o.status !== 'pending') return res.status(400).json({ error: '该订单当前状态不可取消' });
+  store.updateOrder(o.id, { status: 'cancelled', cancelAt: Date.now() });
+  res.json({ ok: true });
+});
+
+/** 查询单个订单状态（前端轮询支付结果用） */
+app.get('/api/user/order/:id', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const o = store.findOrder(req.params.id);
+  if (!o) return res.status(404).json({ error: '订单不存在' });
+  if (o.account !== u.account) return res.status(403).json({ error: '无权查看该订单' });
+  res.json({
+    order: {
+      ...o,
+      expired: o.status === 'pending' && o.expire && o.expire < Date.now(),
+    },
+    vip: vipView(u),
+  });
+});
+
+/**
+ * 订单完成后发放权益（幂等：已发放过不再重复）
+ * @param {object} order
+ * @param {object} opts { via 支付渠道 }
+ */
+function finishOrder(order, opts = {}) {
+  if (!order || order.status === 'paid') return order;
+  const cfg = store.settings.monetize || {};
+  store.updateOrder(order.id, {
+    status: 'paid',
+    payAt: Date.now(),
+    paidAt: Date.now(),   // 兼容旧字段
+    payVia: opts.via || order.payMethod || 'online',
+    grantDone: false,
+  });
+  const fresh = store.findOrder(order.id);
+
+  const u = fresh.account && fresh.account !== 'guest' ? store.findUser(fresh.account) : null;
+  if (u) {
+    try {
+      if (fresh.type === 'recharge') {
+        store.addBalance(u.account, fresh.amount);
+      } else if (fresh.planId) {
+        const plan = store.findPlan(fresh.planId);
+        if (plan) {
+          pay.grantVip(u, plan);
+          store.upsertUser(u);
+        }
+      }
+      store.updateOrder(fresh.id, { grantDone: true, grantAt: Date.now() });
+    } catch (e) {
+      console.error('[pay] 发放权益失败', e.message);
+      store.updateOrder(fresh.id, { grantError: e.message });
     }
   }
+  return store.findOrder(order.id);
+}
+
+/** 模拟支付（演示模式 / 测试模式专用） */
+app.post('/api/pay/mock', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  if (!cfg.enabled) return res.status(403).json({ error: '付费模块未开启' });
+  if (cfg.testMode === false) return res.status(403).json({ error: '演示支付已关闭' });
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const o = store.findOrder((req.body || {}).orderId);
+  if (!o) return res.status(404).json({ error: '订单不存在' });
+  if (o.account !== u.account) return res.status(403).json({ error: '无权操作该订单' });
+  if (o.status === 'paid') return res.json({ ok: true, order: o, vip: vipView(u) });
+  if (o.status !== 'pending') return res.status(400).json({ error: '订单已失效，请重新下单' });
+  const done = finishOrder(o, { via: 'mock' });
+  res.json({ ok: true, order: done, vip: vipView(store.findUser(u.account)) });
+});
+
+/**
+ * 支付回调（真实网关）
+ * body: { out_trade_no|orderId, trade_status|status, money, sign, ... }
+ * 校验：签名（若配置了 signKey）+ 金额一致性
+ */
+app.post('/api/pay/callback', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const b = req.body || {};
+  const orderId = b.out_trade_no || b.orderId || b.order_id;
+  const o = store.findOrder(orderId);
+  if (!o) return res.status(404).send('order not found');
+
+  // 签名校验（配置了 signKey 才强制）
+  if (cfg.signKey) {
+    if (!pay.verifySign(b, cfg.signKey)) {
+      console.warn('[pay] 回调签名校验失败', orderId);
+      return res.status(400).send('sign error');
+    }
+  }
+
+  // 金额校验：若回调带金额，必须与订单一致
+  if (b.money !== undefined && money(b.money) !== money(o.amount)) {
+    console.warn('[pay] 回调金额不一致', orderId, b.money, o.amount);
+    return res.status(400).send('amount mismatch');
+  }
+
+  // 支付状态：易支付风格 trade_status=TRADE_SUCCESS
+  const okStatus = ['TRADE_SUCCESS', 'SUCCESS', 'success', 'paid', 'TRADE_FINISHED'].includes(String(b.trade_status || b.status || 'paid'));
+  if (!okStatus) {
+    return res.send('fail');
+  }
+
+  if (o.status === 'pending') finishOrder(o, { via: 'callback' });
+  // 网关通常要求返回 success 纯文本
+  res.send('success');
+});
+
+/** 退款 / 后台手动标记（管理员） */
+function refundOrder(id, byAdmin) {
+  const o = store.findOrder(id);
+  if (!o) return null;
+  if (o.status !== 'paid') return { error: '仅已支付订单可退款' };
+  const u = o.account && o.account !== 'guest' ? store.findUser(o.account) : null;
+
+  // 退款：扣回余额或回收会员时长（按套餐天数回退）
+  if (u) {
+    if (o.type === 'recharge') {
+      store.addBalance(u.account, -o.amount);
+    } else if (o.planId && u.vip) {
+      const plan = store.findPlan(o.planId);
+      if (plan) {
+        u.vip.expire = Math.max(Date.now(), u.vip.expire - plan.days * 86400000);
+        if (u.vip.expire <= Date.now()) u.vip = null;
+        store.upsertUser(u);
+      }
+    }
+  }
+  store.updateOrder(id, { status: 'refunded', refundAt: Date.now(), refundBy: byAdmin || 'admin' });
+  return store.findOrder(id);
+}
+
+/* ============================================================
+ * 兑换码（用户端）
+ * ============================================================ */
+
+/** 兑换 */
+app.post('/api/user/redeem', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  if (cfg.redeemEnabled === false) return res.status(403).json({ error: '本站未开启兑换码功能' });
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录后再兑换' });
+
+  const code = String((req.body || {}).code || '').trim();
+  if (!code) return res.status(400).json({ error: '请输入兑换码' });
+
+  const rec = store.findRedeemCode(code);
+  const chk = pay.checkRedeem(rec);
+  if (!chk.ok) return res.status(400).json({ error: chk.error });
+
+  const r = pay.applyRedeem(rec, u);
+  store.upsertUser(u);
+  store.consumeRedeemCode(rec.code, u.account);
+
+  // 记录一条零金额订单，便于流水查询
+  store.addOrder({
+    id: pay.newOrderNo(),
+    type: rec.type === 'balance' ? 'recharge' : 'vip',
+    account: u.account,
+    planId: null,
+    planName: rec.planName + '（兑换码）',
+    amount: 0,
+    payMethod: 'redeem',
+    status: 'paid',
+    payAt: Date.now(),
+    payVia: 'redeem',
+    redeemCode: rec.code,
+    grantDone: true,
+    title: rec.planName,
+  });
+
+  res.json({ ok: true, redeem: r, vip: vipView(store.findUser(u.account)) });
+});
+
+/* ============================================================
+ * 会员付费（后台管理）
+ * ============================================================ */
+
+/** 保存付费配置 */
+app.put('/api/admin/monetize', requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const patch = {};
+  for (const k of ['enabled', 'testMode', 'allowBalance', 'redeemEnabled', 'autoRenewTip', 'adminUnlimited']) {
+    if (b[k] !== undefined) patch[k] = !!b[k];
+  }
+  if (b.mode !== undefined) patch.mode = b.mode === 'required' ? 'required' : 'optional';
+  if (b.provider !== undefined) patch.provider = ['mock', 'epay', 'custom'].includes(b.provider) ? b.provider : 'mock';
+  if (b.currency !== undefined) patch.currency = String(b.currency).slice(0, 4) || '¥';
+  for (const k of ['notifyUrl', 'merchantId', 'signKey', 'gateway']) {
+    if (b[k] !== undefined) patch[k] = String(b[k]).slice(0, 300);
+  }
+  for (const k of ['minRecharge', 'orderTimeout']) {
+    if (b[k] !== undefined) patch[k] = Math.max(0, Number(b[k]) || 0);
+  }
+  if (Array.isArray(b.rechargePresets)) {
+    patch.rechargePresets = b.rechargePresets
+      .map((x) => Math.max(1, Number(x) || 0))
+      .filter(Boolean)
+      .slice(0, 12);
+  }
+  if (Array.isArray(b.plans)) {
+    patch.plans = b.plans.slice(0, 20).map((p, i) => ({
+      id: String(p.id || 'plan_' + (i + 1)).slice(0, 40),
+      name: String(p.name || '套餐').slice(0, 30),
+      days: Math.max(1, Math.min(3650, parseInt(p.days, 10) || 30)),
+      price: Math.max(0, money(p.price)),
+      originalPrice: p.originalPrice ? Math.max(0, money(p.originalPrice)) : 0,
+      badge: String(p.badge || '').slice(0, 12),
+      recommended: !!p.recommended,
+      perks: Array.isArray(p.perks)
+        ? p.perks.map((x) => String(x).trim()).filter(Boolean).slice(0, 12)
+        : String(p.perks || '').split(/[，,]/).map((x) => x.trim()).filter(Boolean).slice(0, 12),
+    }));
+  }
+  store.setSettings({ monetize: patch });
+  res.json(store.settings.monetize);
+});
+
+/** 订单管理：分页 + 筛选 */
+app.get('/api/admin/orders', requireAdmin, (req, res) => {
+  store.expireOrders();
+  const { status = '', type = '', account = '', keyword = '', page = 1, size = 20 } = req.query;
+  res.json(store.queryOrders({
+    status, type, account, keyword,
+    page: parseInt(page, 10) || 1,
+    size: parseInt(size, 10) || 20,
+  }));
+});
+
+/** 订单操作：标记已支付 / 退款 / 取消 */
+app.put('/api/admin/orders/:id', requireAdmin, (req, res) => {
+  const { action, note } = req.body || {};
+  const o = store.findOrder(req.params.id);
+  if (!o) return res.status(404).json({ error: '订单不存在' });
+
+  if (action === 'paid') {
+    if (o.status === 'paid') return res.json({ ok: true, order: o });
+    const done = finishOrder(o, { via: 'admin' });
+    return res.json({ ok: true, order: done });
+  }
+  if (action === 'refund') {
+    const r = refundOrder(o.id, (req.admin && req.admin.user) || 'admin');
+    if (r && r.error) return res.status(400).json({ error: r.error });
+    return res.json({ ok: true, order: r });
+  }
+  if (action === 'cancel') {
+    store.updateOrder(o.id, { status: 'cancelled', cancelAt: Date.now() });
+    return res.json({ ok: true, order: store.findOrder(o.id) });
+  }
+  // 兼容旧的直接 patch 用法
+  const patch = { ...(req.body || {}) };
+  delete patch.action;
+  if (note !== undefined) patch.note = String(note).slice(0, 200);
+  store.updateOrder(o.id, patch);
+  res.json(store.findOrder(o.id));
+});
+
+app.delete('/api/admin/orders/:id', requireAdmin, (req, res) => {
+  const s = store.getOrders();
+  const i = s.findIndex((x) => x.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: '订单不存在' });
+  s.splice(i, 1);
   res.json({ ok: true });
+});
+
+/** 收入看板 */
+app.get('/api/admin/revenue', requireAdmin, (req, res) => {
+  store.expireOrders();
+  res.json(store.revenueSummary());
+});
+
+/* ---- 兑换码管理 ---- */
+app.get('/api/admin/redeem', requireAdmin, (req, res) => {
+  const { batch = '', type = '', status = '', keyword = '', page = 1, size = 50 } = req.query;
+  res.json(store.queryRedeemCodes({
+    batch, type, status, keyword,
+    page: parseInt(page, 10) || 1,
+    size: parseInt(size, 10) || 50,
+  }));
+});
+
+app.post('/api/admin/redeem', requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const type = b.type === 'balance' ? 'balance' : 'vip';
+  const value = Number(b.value);
+  if (!(value > 0)) return res.status(400).json({ error: '请填写有效的面额/天数' });
+  if (type === 'vip' && value > 3650) return res.status(400).json({ error: '会员天数过大' });
+  if (type === 'balance' && value > 100000) return res.status(400).json({ error: '充值金额过大' });
+
+  const list = store.createRedeemCodes({
+    type,
+    value,
+    planName: String(b.planName || (type === 'balance' ? '余额充值' : `${value} 天会员`)).slice(0, 30),
+    count: Math.max(1, Math.min(500, parseInt(b.count, 10) || 1)),
+    batch: String(b.batch || '').slice(0, 24) || undefined,
+    ttlDays: Math.max(0, parseInt(b.ttlDays, 10) || 0),
+  });
+  res.json({ ok: true, codes: list, count: list.length });
+});
+
+app.delete('/api/admin/redeem', requireAdmin, (req, res) => {
+  const codes = (req.body || {}).codes || [];
+  if (!Array.isArray(codes) || !codes.length) return res.status(400).json({ error: '请选择要删除的兑换码' });
+  store.deleteRedeemCodes(codes.map((c) => String(c).toUpperCase()));
+  res.json({ ok: true });
+});
+
+/** 导出兑换码 CSV */
+app.get('/api/admin/redeem/export', requireAdmin, (req, res) => {
+  const batch = req.query.batch || '';
+  const status = req.query.status || '';
+  const all = store.queryRedeemCodes({ batch, status, page: 1, size: 200 }).list;
+  // 导出该筛选条件下的全部（最多 5000 条）
+  const rows = [];
+  rows.push(['兑换码', '类型', '面额/天数', '套餐名', '批次', '状态', '使用者', '使用时间', '创建时间'].join(','));
+  const fmt = (t) => (t ? new Date(t).toLocaleString('zh-CN') : '');
+  for (const x of all.slice(0, 5000)) {
+    rows.push([
+      x.code,
+      x.type === 'balance' ? '余额' : '会员',
+      x.value,
+      `"${String(x.planName || '').replace(/"/g, '""')}"`,
+      x.batch || '',
+      x.used ? '已使用' : '未使用',
+      x.usedBy || '',
+      fmt(x.usedAt),
+      fmt(x.createdAt),
+    ].join(','));
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="redeem-${batch || 'all'}.csv"`);
+  res.send('\ufeff' + rows.join('\n'));  // BOM 让 Excel 正确识别中文
 });
 
 /* ============================================================
@@ -1115,6 +1696,7 @@ function familyView(fam, me) {
 /** 判断会员是否有效（家庭共享时成员也算） */
 function isVip(u) {
   if (!u) return false;
+  if (isAdminAccount(u.account)) return true;      // 管理员默认终身会员
   const own = u.vip && u.vip.expire && u.vip.expire > Date.now();
   if (own) return true;
   // 家庭共享：户主是会员则成员共享

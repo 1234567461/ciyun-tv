@@ -436,91 +436,418 @@ async function viewHealth(c) {
 }
 
 /* ============================================================
-   会员付费
+   会员付费 / 兑换码
    ============================================================ */
+let mtState = { tab: 'overview', plans: [], page: 1, size: 20, filter: {} };
+
 async function viewMonetize(c) {
-  const s = app.settings;
-  const m = s.monetize;
-  c.innerHTML = `
-    <div class="page-head"><div><h2>会员付费</h2><div class="sub">可选模块 · 关闭时完全免费</div></div></div>
-    <div class="card">
-      <div class="switch-row">
-        <div><div class="t">启用付费模块</div><div class="d">关闭后所有内容永久免费，无任何会员限制（开源默认）</div></div>
-        <div class="switch ${m.enabled ? 'on' : ''}" id="m-toggle"></div>
-      </div>
-      <div style="padding:14px 0 0;font-size:13px;color:var(--text-mute)">
-        说明：核心影视观看<b style="color:var(--text-dim)">永久免费</b>。开启付费模块后，会员可获得增值权益（去广告、超清画质、无限收藏等），
-        这是常见的开源项目可持续模式。支付网关需自行对接。
-      </div>
-    </div>
-    <div class="card">
-      <h3>💎 会员套餐</h3>
-      <div id="plans"></div>
-      <button class="btn btn-ghost btn-sm" id="add-plan" style="margin-top:14px">+ 添加套餐</button>
-      <button class="btn btn-primary btn-sm" id="save-plans" style="margin-top:14px;margin-left:8px">保存套餐</button>
-    </div>
-    <div class="card">
-      <h3>🧾 订单记录</h3>
-      <div id="orders"></div>
-    </div>`;
+  let rev = null;
+  try { rev = await API('/api/admin/revenue'); } catch (e) { rev = null; }
+  const m = app.settings.monetize || {};
 
-  let plans = JSON.parse(JSON.stringify(m.plans || []));
-  const paintPlans = () => {
-    $('#plans').innerHTML = plans.map((p, i) => `
-      <div class="card" style="background:var(--bg);margin-bottom:12px">
-        <div class="row">
-          <div style="flex:1"><label>套餐名称</label><input data-i="${i}" data-k="name" value="${esc(p.name)}"></div>
-          <div style="width:110px;flex:0 0 auto"><label>天数</label><input data-i="${i}" data-k="days" type="number" value="${p.days}"></div>
-          <div style="width:110px;flex:0 0 auto"><label>价格 ¥</label><input data-i="${i}" data-k="price" type="number" value="${p.price}"></div>
-          <div style="flex:0 0 auto;align-self:flex-end"><button class="btn btn-danger btn-sm" data-rm="${i}">删除</button></div>
-        </div>
-        <div class="field" style="margin:12px 0 0"><label>权益（逗号分隔）</label>
-          <input data-i="${i}" data-k="perks" value="${esc((p.perks || []).join('，'))}"></div>
-      </div>`).join('') || '<div class="empty">暂无套餐</div>';
+  c.innerHTML =
+    '<div class="page-head"><div><h2>会员付费</h2><div class="sub">可付费可不付费 · 核心观看永久免费</div></div>' +
+    '<button class="btn btn-ghost" id="mt-refresh">\u21bb 刷新</button></div>' +
+    '<div class="grid4" style="margin-bottom:18px">' +
+      statCard('累计收入', '\u00a5' + ((rev && rev.revenue) || 0).toFixed(2), '共 ' + ((rev && rev.paidCount) || 0) + ' 笔已支付') +
+      statCard('今日收入', '\u00a5' + ((rev && rev.todayRevenue) || 0).toFixed(2), ((rev && rev.todayCount) || 0) + ' 笔订单') +
+      statCard('付费用户', String((rev && rev.payers) || 0), '客单价 \u00a5' + ((rev && rev.arpu) || 0)) +
+      statCard('待支付', String((rev && rev.pendingCount) || 0), '已退款 ' + ((rev && rev.refundedCount) || 0) + ' 笔') +
+    '</div>' +
+    '<div class="vip-admin-tabs">' +
+      adminTab('overview', '\ud83d\udcca 收入概览') +
+      adminTab('config', '\u2699\ufe0f 付费设置') +
+      adminTab('plans', '\ud83d\udc8e 会员套餐') +
+      adminTab('orders', '\ud83e\uddfe 订单管理') +
+      adminTab('redeem', '\ud83c\udf81 兑换码') +
+    '</div>' +
+    '<div id="mt-body"></div>';
 
-    $$('[data-i]', $('#plans')).forEach((inp) => (inp.oninput = () => {
+  const paint = () => {
+    $$('.vip-admin-tab').forEach((b) => b.classList.toggle('on', b.dataset.t === mtState.tab));
+    const body = $('#mt-body');
+    if (mtState.tab === 'overview') renderMtOverview(body, rev);
+    else if (mtState.tab === 'config') renderMtConfig(body, m);
+    else if (mtState.tab === 'plans') renderMtPlans(body, m);
+    else if (mtState.tab === 'orders') renderMtOrders(body);
+    else renderMtRedeem(body);
+  };
+  $$('.vip-admin-tab').forEach((b) => (b.onclick = () => { mtState.tab = b.dataset.t; paint(); }));
+  $('#mt-refresh').onclick = () => { mtState.page = 1; viewMonetize($('#content')); };
+  paint();
+}
+
+function statCard(k, v, d) {
+  return '<div class="stat"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="d">' + d + '</div></div>';
+}
+function adminTab(id, label) {
+  return '<button class="vip-admin-tab" data-t="' + id + '">' + label + '</button>';
+}
+
+/* ---------------------------- 收入概览 ---------------------------- */
+function renderMtOverview(box, rev) {
+  if (!rev) { box.innerHTML = '<div class="card">加载失败</div>'; return; }
+  const max = Math.max(1, ...rev.days.map((d) => d.amount));
+  box.innerHTML =
+    '<div class="card"><h3>\ud83d\udcc8 近 14 天收入</h3>' +
+      '<div class="chart">' + rev.days.map((d) =>
+        '<div class="bar" style="height:' + Math.max(2, (d.amount / max) * 100) + '%" title="' + d.date + ' \u00a5' + d.amount + '">' +
+        (d.amount ? '<span>' + d.amount + '</span>' : '') + '</div>').join('') +
+      '</div>' +
+      '<div class="chart-x">' + rev.days.map((d) => '<div>' + d.date.slice(5) + '</div>').join('') + '</div>' +
+    '</div>' +
+    '<div class="card"><h3>\ud83d\udc8e 套餐销售分布</h3>' +
+      (rev.byPlan.length
+        ? '<div class="table-wrap"><table class="table"><thead><tr><th>套餐</th><th>销量</th><th>收入</th><th>占比</th></tr></thead><tbody>' +
+          rev.byPlan.map((p) => {
+            const pct = rev.revenue ? ((p.amount / rev.revenue) * 100).toFixed(1) : 0;
+            return '<tr><td class="name">' + esc(p.name) + '</td><td>' + p.count + ' 笔</td>' +
+              '<td style="color:var(--ok)">\u00a5' + p.amount.toFixed(2) + '</td>' +
+              '<td><div style="display:flex;align-items:center;gap:8px">' +
+                '<div style="flex:1;height:6px;background:rgba(255,255,255,.1);border-radius:4px;overflow:hidden;min-width:60px">' +
+                '<i style="display:block;height:100%;width:' + pct + '%;background:var(--primary)"></i></div>' +
+                '<span style="font-size:12px;color:var(--text-mute)">' + pct + '%</span></div></td></tr>';
+          }).join('') + '</tbody></table></div>'
+        : '<div class="empty"><div class="i">\ud83d\udce6</div>暂无销售数据</div>') +
+    '</div>';
+}
+
+/* ---------------------------- 付费设置 ---------------------------- */
+function renderMtConfig(box, m) {
+  const sw = (id, on) => '<div class="switch ' + (on ? 'on' : '') + '" id="' + id + '"></div>';
+  box.innerHTML =
+    '<div class="card"><h3>\u2699\ufe0f 收费模式</h3>' +
+      '<div class="switch-row"><div><div class="t">启用付费模块</div><div class="d">关闭后所有内容永久免费，无任何会员限制（开源默认）</div></div>' + sw('mt-en', m.enabled) + '</div>' +
+      '<div class="field" style="margin-top:16px"><label>收费模式</label>' +
+        '<select id="mt-mode" style="max-width:320px">' +
+          '<option value="optional"' + (m.mode !== 'required' ? ' selected' : '') + '>自愿赞助制（可付费可不付费，全功能可用）</option>' +
+          '<option value="required"' + (m.mode === 'required' ? ' selected' : '') + '>权益制（部分增值功能需会员）</option>' +
+        '</select>' +
+        '<div style="font-size:12px;color:var(--text-mute);margin-top:6px">推荐「自愿赞助制」：不付费也能完整使用，付费仅获得增值权益，符合开源精神</div>' +
+      '</div>' +
+      '<div class="switch-row"><div><div class="t">允许余额支付</div><div class="d">用户可先充值，再用余额购买会员</div></div>' + sw('mt-bal', m.allowBalance !== false) + '</div>' +
+      '<div class="switch-row"><div><div class="t">开启兑换码</div><div class="d">用户可凭兑换码兑换会员时长或余额</div></div>' + sw('mt-redeem', m.redeemEnabled !== false) + '</div>' +
+      '<div class="switch-row"><div><div class="t">管理员特权</div><div class="d">管理员账号默认终身会员 + 无限额度，免下单、免扣款</div></div>' + sw('mt-admin', m.adminUnlimited !== false) + '</div>' +
+      '<div class="switch-row"><div><div class="t">演示支付模式</div><div class="d">开启后下单可直接模拟支付成功（仅用于体验，正式上线请关闭）</div></div>' + sw('mt-test', m.testMode !== false) + '</div>' +
+    '</div>' +
+    '<div class="card"><h3>\ud83d\udcb3 支付网关</h3>' +
+      '<div class="field"><label>支付服务商</label><select id="mt-provider" style="max-width:320px">' +
+        '<option value="mock"' + (m.provider === 'mock' ? ' selected' : '') + '>内置模拟支付（开箱即用，无需配置）</option>' +
+        '<option value="epay"' + (m.provider === 'epay' ? ' selected' : '') + '>易支付风格接口</option>' +
+        '<option value="custom"' + (m.provider === 'custom' ? ' selected' : '') + '>自定义回调</option>' +
+      '</select></div>' +
+      '<div class="row" style="margin-top:14px"><div><label>商户号 (PID)</label><input id="mt-pid" value="' + esc(m.merchantId || '') + '" placeholder="如 1001"></div>' +
+      '<div><label>网关地址</label><input id="mt-gateway" value="' + esc(m.gateway || '') + '" placeholder="https://pay.example.com/submit"></div></div>' +
+      '<div class="field" style="margin-top:14px"><label>签名密钥 (KEY)</label><input id="mt-key" value="' + esc(m.signKey || '') + '" placeholder="用于校验支付回调签名，务必保密"></div>' +
+      '<div class="field" style="margin-top:14px"><label>异步回调地址（留空自动使用本站 /api/pay/callback）</label><input id="mt-notify" value="' + esc(m.notifyUrl || '') + '" placeholder="https://你的域名/api/pay/callback"></div>' +
+    '</div>' +
+    '<div class="card"><h3>\ud83d\udcb0 充值与订单</h3>' +
+      '<div class="row"><div><label>最低充值金额</label><input id="mt-min" type="number" min="1" value="' + (m.minRecharge || 1) + '"></div>' +
+      '<div><label>订单超时（分钟）</label><input id="mt-timeout" type="number" min="1" value="' + (m.orderTimeout || 30) + '"></div>' +
+      '<div><label>货币符号</label><input id="mt-cur" value="' + esc(m.currency || '\u00a5') + '" maxlength="4"></div></div>' +
+      '<div class="field" style="margin-top:14px"><label>充值快捷金额（逗号分隔）</label><input id="mt-presets" value="' + esc((m.rechargePresets || []).join('\uff0c')) + '"></div>' +
+    '</div>' +
+    '<button class="btn btn-primary" id="mt-save">保存全部设置</button>';
+
+  ['mt-en', 'mt-bal', 'mt-redeem', 'mt-admin', 'mt-test'].forEach((id) => {
+    const el = $('#' + id);
+    if (el) el.onclick = () => el.classList.toggle('on');
+  });
+
+  $('#mt-save').onclick = async () => {
+    const body = {
+      enabled: $('#mt-en').classList.contains('on'),
+      mode: $('#mt-mode').value,
+      provider: $('#mt-provider').value,
+      allowBalance: $('#mt-bal').classList.contains('on'),
+      redeemEnabled: $('#mt-redeem').classList.contains('on'),
+      adminUnlimited: $('#mt-admin').classList.contains('on'),
+      testMode: $('#mt-test').classList.contains('on'),
+      merchantId: $('#mt-pid').value.trim(),
+      gateway: $('#mt-gateway').value.trim(),
+      signKey: $('#mt-key').value.trim(),
+      notifyUrl: $('#mt-notify').value.trim(),
+      minRecharge: +$('#mt-min').value || 1,
+      orderTimeout: +$('#mt-timeout').value || 30,
+      currency: $('#mt-cur').value.trim() || '\u00a5',
+      rechargePresets: $('#mt-presets').value.split(/[\uff0c,]/).map((x) => +x.trim()).filter(Boolean),
+    };
+    try {
+      app.settings.monetize = await API('/api/admin/monetize', { method: 'PUT', body });
+      toast('设置已保存', 'ok');
+      viewMonetize($('#content'));
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+/* ---------------------------- 套餐管理 ---------------------------- */
+function renderMtPlans(box, m) {
+  mtState.plans = JSON.parse(JSON.stringify(m.plans || []));
+  box.innerHTML = '<div class="card"><h3>\ud83d\udc8e 会员套餐</h3><div id="mt-plan-list"></div>' +
+    '<button class="btn btn-ghost btn-sm" id="mt-add-plan" style="margin-top:14px">+ 添加套餐</button>' +
+    '<button class="btn btn-primary btn-sm" id="mt-save-plans" style="margin-top:14px;margin-left:8px">保存套餐</button></div>';
+
+  const paint = () => {
+    $('#mt-plan-list').innerHTML = mtState.plans.length
+      ? mtState.plans.map((p, i) =>
+          '<div class="card" style="background:var(--bg);margin-bottom:12px">' +
+            '<div class="row">' +
+              '<div style="flex:1"><label>套餐名称</label><input data-i="' + i + '" data-k="name" value="' + esc(p.name) + '"></div>' +
+              '<div style="width:100px;flex:0 0 auto"><label>天数</label><input data-i="' + i + '" data-k="days" type="number" value="' + p.days + '"></div>' +
+              '<div style="width:100px;flex:0 0 auto"><label>现价 \u00a5</label><input data-i="' + i + '" data-k="price" type="number" value="' + p.price + '"></div>' +
+              '<div style="width:100px;flex:0 0 auto"><label>原价 \u00a5</label><input data-i="' + i + '" data-k="originalPrice" type="number" value="' + (p.originalPrice || 0) + '"></div>' +
+              '<div style="width:110px;flex:0 0 auto"><label>角标</label><input data-i="' + i + '" data-k="badge" value="' + esc(p.badge || '') + '" placeholder="如 最划算"></div>' +
+              '<div style="flex:0 0 auto;align-self:flex-end;display:flex;gap:6px">' +
+                '<button class="btn btn-ghost btn-sm" data-rec="' + i + '">' + (p.recommended ? '\u2b50 推荐中' : '\u2606 设为推荐') + '</button>' +
+                '<button class="btn btn-danger btn-sm" data-rm="' + i + '">删除</button></div>' +
+            '</div>' +
+            '<div class="field" style="margin:12px 0 0"><label>权益（逗号分隔）</label>' +
+              '<input data-i="' + i + '" data-k="perks" value="' + esc((p.perks || []).join('\uff0c')) + '"></div>' +
+          '</div>').join('')
+      : '<div class="empty"><div class="i">\ud83d\udce6</div>暂无套餐，点击下方添加</div>';
+
+    $$('[data-k]', $('#mt-plan-list')).forEach((inp) => (inp.oninput = () => {
       const i = +inp.dataset.i, k = inp.dataset.k;
-      if (k === 'perks') plans[i].perks = inp.value.split(/[，,]/).map((x) => x.trim()).filter(Boolean);
-      else if (k === 'days' || k === 'price') plans[i][k] = +inp.value;
-      else plans[i][k] = inp.value;
+      if (k === 'perks') mtState.plans[i].perks = inp.value.split(/[\uff0c,]/).map((x) => x.trim()).filter(Boolean);
+      else if (k === 'days' || k === 'price' || k === 'originalPrice') mtState.plans[i][k] = +inp.value;
+      else mtState.plans[i][k] = inp.value;
     }));
-    $$('[data-rm]', $('#plans')).forEach((b) => (b.onclick = () => { plans.splice(+b.dataset.rm, 1); paintPlans(); }));
+    $$('[data-rm]', $('#mt-plan-list')).forEach((b) => (b.onclick = () => {
+      if (!confirm('删除该套餐？已购买用户的会员不受影响。')) return;
+      mtState.plans.splice(+b.dataset.rm, 1); paint();
+    }));
+    $$('[data-rec]', $('#mt-plan-list')).forEach((b) => (b.onclick = () => {
+      const i = +b.dataset.rec;
+      const next = !mtState.plans[i].recommended;
+      mtState.plans.forEach((p) => (p.recommended = false));
+      mtState.plans[i].recommended = next;
+      paint();
+    }));
   };
-  paintPlans();
+  paint();
 
-  $('#m-toggle').onclick = async (e) => {
-    const on = !e.target.classList.contains('on');
-    e.target.classList.toggle('on');
-    await API('/api/admin/monetize', { method: 'PUT', body: { enabled: on, plans } });
-    app.settings.monetize.enabled = on;
-    toast(on ? '付费模块已启用' : '付费模块已关闭', 'ok');
+  $('#mt-add-plan').onclick = () => {
+    mtState.plans.push({ id: 'plan_' + Date.now().toString(36), name: '新套餐', days: 30, price: 10, originalPrice: 0, badge: '', recommended: false, perks: [] });
+    paint();
   };
-  $('#add-plan').onclick = () => { plans.push({ id: 'plan_' + Date.now().toString(36), name: '新套餐', days: 30, price: 10, perks: [] }); paintPlans(); };
-  $('#save-plans').onclick = async () => {
-    await API('/api/admin/monetize', { method: 'PUT', body: { enabled: app.settings.monetize.enabled, plans } });
-    app.settings.monetize.plans = plans;
-    toast('套餐已保存', 'ok');
+  $('#mt-save-plans').onclick = async () => {
+    try {
+      app.settings.monetize = await API('/api/admin/monetize', {
+        method: 'PUT',
+        body: { enabled: app.settings.monetize.enabled, plans: mtState.plans },
+      });
+      toast('套餐已保存', 'ok');
+      viewMonetize($('#content'));
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+/* ---------------------------- 订单管理 ---------------------------- */
+async function renderMtOrders(box) {
+  const f = mtState.filter || {};
+  box.innerHTML =
+    '<div class="card"><div class="row" style="margin-bottom:16px;flex-wrap:wrap;gap:10px">' +
+      '<input id="mo-kw" placeholder="搜索订单号 / 套餐 / 账号\u2026" style="flex:1;min-width:200px">' +
+      '<select id="mo-status" style="width:140px"><option value="">全部状态</option>' +
+        '<option value="pending">待支付</option><option value="paid">已支付</option>' +
+        '<option value="refunded">已退款</option><option value="expired">已过期</option>' +
+        '<option value="cancelled">已取消</option></select>' +
+      '<select id="mo-type" style="width:130px"><option value="">全部类型</option>' +
+        '<option value="vip">会员套餐</option><option value="recharge">余额充值</option></select>' +
+      '<button class="btn btn-ghost btn-sm" id="mo-search">查询</button>' +
+    '</div><div id="mo-list"></div></div>';
+
+  const statusBadge = (s) => ({
+    paid: '<span class="badge ok">已支付</span>',
+    pending: '<span class="badge warn">待支付</span>',
+    refunded: '<span class="badge dim">已退款</span>',
+    expired: '<span class="badge dim">已过期</span>',
+    cancelled: '<span class="badge dim">已取消</span>',
+  }[s] || s);
+
+  const load = async () => {
+    $('#mo-list').innerHTML = '<div class="empty"><div class="i">\u23f3</div>加载中\u2026</div>';
+    const q = new URLSearchParams({
+      page: mtState.page, size: mtState.size,
+      keyword: $('#mo-kw').value.trim(),
+      status: $('#mo-status').value,
+      type: $('#mo-type').value,
+    });
+    const d = await API('/api/admin/orders?' + q);
+    if (!d.list.length) { $('#mo-list').innerHTML = '<div class="empty"><div class="i">\ud83e\uddfe</div>暂无订单</div>'; return; }
+
+    $('#mo-list').innerHTML =
+      '<div class="table-wrap"><table class="table"><thead><tr>' +
+      '<th>订单号</th><th>套餐</th><th>金额</th><th>账号</th><th>状态</th><th>渠道</th><th>时间</th><th style="width:200px">操作</th>' +
+      '</tr></thead><tbody>' + d.list.map((o) =>
+        '<tr><td style="font-size:11.5px;font-family:monospace">' + esc(o.id) + '</td>' +
+        '<td>' + esc(o.planName || '\u2014') + '</td>' +
+        '<td style="font-weight:700;color:' + (o.status === 'paid' ? 'var(--ok)' : 'var(--text)') + '">\u00a5' + (o.amount || 0).toFixed(2) + '</td>' +
+        '<td>' + esc(o.account || '\u2014') + '</td>' +
+        '<td>' + statusBadge(o.status) + (o.expired ? ' <span class="badge dim">超时</span>' : '') + '</td>' +
+        '<td style="font-size:12px;color:var(--text-mute)">' + esc(o.payVia || o.payMethod || '\u2014') + '</td>' +
+        '<td style="font-size:12px;color:var(--text-mute)">' + new Date(o.createdAt).toLocaleString('zh-CN') + '</td>' +
+        '<td>' +
+          (o.status === 'pending' ? '<button class="btn btn-ghost btn-sm" data-paid="' + o.id + '">标记已付</button> ' : '') +
+          (o.status === 'paid' ? '<button class="btn btn-ghost btn-sm" data-refund="' + o.id + '">退款</button> ' : '') +
+          (o.status === 'pending' ? '<button class="btn btn-ghost btn-sm" data-cancel="' + o.id + '">取消</button> ' : '') +
+          '<button class="btn btn-danger btn-sm" data-del="' + o.id + '">删除</button>' +
+        '</td></tr>').join('') +
+      '</tbody></table></div>' +
+      '<div class="pager">' +
+        '<button class="btn btn-ghost btn-sm" id="mo-prev" ' + (mtState.page <= 1 ? 'disabled' : '') + '>\u2039 上一页</button>' +
+        '<span style="color:var(--text-mute);font-size:13px">第 ' + mtState.page + ' 页 \u00b7 共 ' + d.total + ' 笔 \u00b7 收入 \u00a5' + ((d.summary && d.summary.revenue) || 0).toFixed(2) + '</span>' +
+        '<button class="btn btn-ghost btn-sm" id="mo-next" ' + (mtState.page * mtState.size >= d.total ? 'disabled' : '') + '>下一页 \u203a</button>' +
+      '</div>';
+
+    $$('[data-paid]').forEach((b) => (b.onclick = async () => {
+      if (!confirm('确认该订单已收到款项？将发放会员权益。')) return;
+      try {
+        await API('/api/admin/orders/' + b.dataset.paid, { method: 'PUT', body: { action: 'paid' } });
+        toast('已标记支付并发放权益', 'ok'); load();
+      } catch (e) { toast(e.message, 'err'); }
+    }));
+    $$('[data-refund]').forEach((b) => (b.onclick = async () => {
+      if (!confirm('确认退款？将回收对应的会员时长或余额。')) return;
+      try {
+        await API('/api/admin/orders/' + b.dataset.refund, { method: 'PUT', body: { action: 'refund' } });
+        toast('已退款', 'ok'); load();
+      } catch (e) { toast(e.message, 'err'); }
+    }));
+    $$('[data-cancel]').forEach((b) => (b.onclick = async () => {
+      await API('/api/admin/orders/' + b.dataset.cancel, { method: 'PUT', body: { action: 'cancel' } });
+      toast('已取消', 'ok'); load();
+    }));
+    $$('[data-del]').forEach((b) => (b.onclick = async () => {
+      if (!confirm('删除该订单记录？此操作不可恢复。')) return;
+      await API('/api/admin/orders/' + b.dataset.del, { method: 'DELETE' });
+      toast('已删除', 'ok'); load();
+    }));
+    if ($('#mo-prev')) $('#mo-prev').onclick = () => { mtState.page = Math.max(1, mtState.page - 1); load(); };
+    if ($('#mo-next')) $('#mo-next').onclick = () => { mtState.page++; load(); };
   };
 
-  // 订单
-  const d = await API('/api/admin/orders');
-  $('#orders').innerHTML = d.orders.length ? `<div class="table-wrap"><table class="table">
-    <thead><tr><th>订单号</th><th>套餐</th><th>金额</th><th>账号</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
-    <tbody>${d.orders.map((o) => `<tr>
-      <td style="font-size:12px">${esc(o.id)}</td>
-      <td>${esc(o.planName)}</td>
-      <td>¥${o.amount}</td>
-      <td>${esc(o.account)}</td>
-      <td><span class="badge ${o.status === 'paid' ? 'ok' : 'warn'}">${o.status === 'paid' ? '已支付' : '待支付'}</span></td>
-      <td style="font-size:12px;color:var(--text-mute)">${new Date(o.createdAt).toLocaleString('zh-CN')}</td>
-      <td>${o.status !== 'paid' ? `<button class="btn btn-ghost btn-sm" data-pay="${o.id}">标记已支付</button>` : '—'}</td>
-    </tr>`).join('')}</tbody></table></div>` : '<div class="empty"><div class="i">🧾</div>暂无订单</div>';
+  $('#mo-search').onclick = () => { mtState.page = 1; load(); };
+  $('#mo-kw').oninput = debounce(() => { mtState.page = 1; load(); }, 400);
+  $('#mo-status').onchange = () => { mtState.page = 1; load(); };
+  $('#mo-type').onchange = () => { mtState.page = 1; load(); };
+  load();
+}
 
-  $$('[data-pay]').forEach((b) => (b.onclick = async () => {
-    await API('/api/pay/callback', { method: 'POST', body: { orderId: b.dataset.pay } });
-    toast('已标记支付', 'ok');
-    viewMonetize($('#content'));
-  }));
+/* ---------------------------- 兑换码 ---------------------------- */
+async function renderMtRedeem(box) {
+  box.innerHTML =
+    '<div class="card"><h3>\ud83c\udf81 批量生成兑换码</h3>' +
+      '<div class="row" style="flex-wrap:wrap">' +
+        '<div><label>类型</label><select id="mr-type"><option value="vip">会员时长</option><option value="balance">余额充值</option></select></div>' +
+        '<div><label>面额 / 天数</label><input id="mr-value" type="number" min="1" value="30"></div>' +
+        '<div><label>数量（最多 500）</label><input id="mr-count" type="number" min="1" max="500" value="10"></div>' +
+        '<div><label>有效期（天，0=永久）</label><input id="mr-ttl" type="number" min="0" value="0"></div>' +
+        '<div><label>批次标记</label><input id="mr-batch" placeholder="如 2026春节"></div>' +
+      '</div>' +
+      '<div style="font-size:12.5px;color:var(--text-mute);margin:14px 0">' +
+        '会员时长类型：面额填天数（如 30 = 一个月）；余额类型：面额填金额（如 50 = 50 元）' +
+      '</div>' +
+      '<button class="btn btn-primary" id="mr-gen">生成兑换码</button>' +
+      '<div id="mr-result" style="margin-top:18px"></div>' +
+    '</div>' +
+    '<div class="card"><h3>\ud83d\udccb 兑换码列表</h3>' +
+      '<div class="row" style="margin-bottom:16px;flex-wrap:wrap;gap:10px">' +
+        '<input id="mr-kw2" placeholder="搜索兑换码 / 使用者\u2026" style="flex:1;min-width:180px">' +
+        '<select id="mr-status" style="width:130px"><option value="">全部状态</option>' +
+          '<option value="unused">未使用</option><option value="used">已使用</option></select>' +
+        '<input id="mr-batch2" placeholder="批次筛选" style="width:150px">' +
+        '<button class="btn btn-ghost btn-sm" id="mr-search">筛选</button>' +
+        '<button class="btn btn-ghost btn-sm" id="mr-export">\u2b07 导出 CSV</button>' +
+      '</div><div id="mr-list"></div></div>';
+
+  $('#mr-type').onchange = () => {
+    const isBal = $('#mr-type').value === 'balance';
+    $('#mr-value').value = isBal ? 50 : 30;
+    $('#mr-value').placeholder = isBal ? '金额' : '天数';
+  };
+
+  $('#mr-gen').onclick = async () => {
+    const body = {
+      type: $('#mr-type').value,
+      value: +$('#mr-value').value,
+      count: +$('#mr-count').value,
+      ttlDays: +$('#mr-ttl').value,
+      batch: $('#mr-batch').value.trim() || undefined,
+    };
+    if (!(body.value > 0)) return toast('请填写有效的面额/天数', 'err');
+    try {
+      const r = await API('/api/admin/redeem', { method: 'POST', body });
+      toast('已生成 ' + r.count + ' 个兑换码', 'ok');
+      const text = r.codes.map((x) => x.code).join('\n');
+      $('#mr-result').innerHTML =
+        '<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:16px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+            '<b>刚生成的 ' + r.count + ' 个兑换码</b>' +
+            '<button class="btn btn-ghost btn-sm" id="mr-copy">\ud83d\udccb 复制全部</button>' +
+          '</div>' +
+          '<textarea readonly style="width:100%;height:130px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:monospace;font-size:13px;color:var(--text);resize:vertical">' + esc(text) + '</textarea>' +
+        '</div>';
+      $('#mr-copy').onclick = () => {
+        navigator.clipboard ? navigator.clipboard.writeText(text) : null;
+        toast('已复制全部兑换码', 'ok');
+      };
+      loadList();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  const loadList = async () => {
+    $('#mr-list').innerHTML = '<div class="empty"><div class="i">\u23f3</div>加载中\u2026</div>';
+    const q = new URLSearchParams({
+      keyword: $('#mr-kw2').value.trim(),
+      status: $('#mr-status').value,
+      batch: $('#mr-batch2').value.trim(),
+      page: 1, size: 100,
+    });
+    const d = await API('/api/admin/redeem?' + q);
+    if (!d.list.length) { $('#mr-list').innerHTML = '<div class="empty"><div class="i">\ud83c\udf81</div>暂无兑换码</div>'; return; }
+    const usable = d.list.filter((x) => !x.used && (!x.expire || x.expire > Date.now())).length;
+    $('#mr-list').innerHTML =
+      '<div style="font-size:13px;color:var(--text-mute);margin-bottom:12px">共 ' + d.total + ' 个 \u00b7 本页可用 ' + usable + ' 个</div>' +
+      '<div class="table-wrap"><table class="table"><thead><tr>' +
+      '<th style="width:34px"><input type="checkbox" id="mr-all"></th>' +
+      '<th>兑换码</th><th>类型</th><th>面额</th><th>套餐名</th><th>批次</th><th>状态</th><th>使用者</th><th style="width:80px">操作</th>' +
+      '</tr></thead><tbody>' + d.list.map((x) =>
+        '<tr><td><input type="checkbox" class="mr-ck" value="' + esc(x.code) + '"></td>' +
+        '<td style="font-family:monospace;font-size:13px;letter-spacing:1px">' + esc(x.code) + '</td>' +
+        '<td>' + (x.type === 'balance' ? '余额' : '会员') + '</td>' +
+        '<td><b>' + (x.type === 'balance' ? '\u00a5' + x.value : x.value + ' 天') + '</b></td>' +
+        '<td>' + esc(x.planName || '\u2014') + '</td>' +
+        '<td style="font-size:12px;color:var(--text-mute)">' + esc(x.batch || '\u2014') + '</td>' +
+        '<td>' + (x.used ? '<span class="badge dim">已使用</span>' : (x.expire && x.expire < Date.now() ? '<span class="badge err">已过期</span>' : '<span class="badge ok">未使用</span>')) + '</td>' +
+        '<td style="font-size:12px">' + esc(x.usedBy || '\u2014') + '</td>' +
+        '<td><button class="btn btn-danger btn-sm" data-drc="' + esc(x.code) + '">删除</button></td></tr>').join('') +
+      '</tbody></table></div>' +
+      '<button class="btn btn-danger btn-sm" id="mr-del-sel" style="margin-top:14px">删除选中</button>';
+
+    if ($('#mr-all')) $('#mr-all').onclick = (e) => $$('.mr-ck').forEach((c) => (c.checked = e.target.checked));
+    $$('[data-drc]').forEach((b) => (b.onclick = async () => {
+      if (!confirm('删除该兑换码？')) return;
+      await API('/api/admin/redeem', { method: 'DELETE', body: { codes: [b.dataset.drc] } });
+      toast('已删除', 'ok'); loadList();
+    }));
+    $('#mr-del-sel').onclick = async () => {
+      const codes = $$('.mr-ck').filter((c) => c.checked).map((c) => c.value);
+      if (!codes.length) return toast('请先勾选要删除的兑换码', 'err');
+      if (!confirm('删除选中的 ' + codes.length + ' 个兑换码？')) return;
+      await API('/api/admin/redeem', { method: 'DELETE', body: { codes } });
+      toast('已删除 ' + codes.length + ' 个', 'ok'); loadList();
+    };
+  };
+
+  $('#mr-search').onclick = loadList;
+  $('#mr-kw2').oninput = debounce(loadList, 400);
+  $('#mr-status').onchange = loadList;
+  $('#mr-export').onclick = () => {
+    const q = new URLSearchParams({ batch: $('#mr-batch2').value.trim(), status: $('#mr-status').value });
+    window.open('/api/admin/redeem/export?' + q, '_blank');
+  };
+  loadList();
 }
 
 /* ============================================================

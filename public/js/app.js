@@ -10,6 +10,7 @@ import { mountComments } from './comments.js';
 import { mountChat } from './chat.js';
 import { createDanmaku, createDanmakuBar } from './danmaku.js';
 import { renderFamilyPage } from './family.js';
+import { renderVipPage } from './vip.js';
 
 const state = {
   site: null,
@@ -129,27 +130,48 @@ function toggleTheme() {
 /* ------------------------- 顶栏用户区 ------------------------- */
 function buildUserArea() {
   const area = h('div', { class: 'user-area' });
+  const monetize = (state.site && state.site.monetize) || {};
+
+  // 会员入口（付费模块开启时显示）
+  const vipEntry = monetize.enabled
+    ? h('a', { class: 'btn btn-vip btn-sm', href: '#/vip', html: '💎<span>会员</span>' })
+    : null;
 
   if (!auth.loggedIn) {
     area.append(
+      vipEntry || '',
       h('a', { class: 'btn btn-ghost btn-sm', href: '#/login', text: '登录' }),
       h('a', { class: 'btn btn-primary btn-sm', href: '#/register', text: '注册' })
     );
+    if (!vipEntry) area.removeChild(area.firstChild);
     return area;
   }
 
   const u = auth.user;
+  const vipActive = u.vipActive || (u.vip && u.vip.expire > Date.now());
+
   const dd = h('div', { class: 'dropdown' }, [
     h('div', { class: 'dd-user' }, [
-      h('div', { class: 'n', text: u.nickname || u.account }),
+      h('div', { class: 'n' }, [
+        h('span', { text: u.nickname || u.account }),
+        vipActive ? h('span', { class: 'dd-vip', text: '💎 会员' }) : null,
+      ]),
       h('div', { class: 'a', text: '@' + u.account }),
+      monetize.enabled
+        ? h('div', { class: 'dd-bal' }, [
+            h('span', { text: '余额 ' + (u.currency || '¥') + (u.balance || 0).toFixed(2) }),
+            h('a', { href: '#/vip?tab=recharge', text: '充值', onclick: () => close() }),
+          ])
+        : null,
     ]),
     h('a', { href: '#/profile', html: '👤<span>个人中心</span>', onclick: () => close() }),
+    monetize.enabled ? h('a', { href: '#/vip', html: '💎<span>会员中心</span>', onclick: () => close() }) : null,
+    monetize.enabled ? h('a', { href: '#/vip?tab=orders', html: '🧾<span>我的订单</span>', onclick: () => close() }) : null,
     h('a', { href: '#/profile?tab=comments', html: '💬<span>我的评论</span>', onclick: () => close() }),
     h('a', { href: '#/fav', html: '⭐<span>我的收藏</span>', onclick: () => close() }),
     h('a', { href: '#/history', html: '🕘<span>观看历史</span>', onclick: () => close() }),
     h('button', { class: 'danger', html: '🚪<span>退出登录</span>', onclick: async () => { await auth.logout(); toast('已退出登录'); renderHeader(); route(); } }),
-  ]);
+  ].filter(Boolean));
 
   const wrap = h('div', { class: 'avatar-menu' }, [avatarEl(u), dd]);
   const av = wrap.querySelector('.avatar');
@@ -161,6 +183,7 @@ function buildUserArea() {
     dd.classList.toggle('open');
     if (willOpen) setTimeout(() => document.addEventListener('click', onDoc), 0);
   };
+  if (vipEntry) area.appendChild(vipEntry);
   area.appendChild(wrap);
   return area;
 }
@@ -208,6 +231,7 @@ async function route() {
     if (seg[0] === 'register') return pageAuth(root, 'register');
     if (seg[0] === 'profile') return pageProfile(root, params.get('tab') || 'info');
     if (seg[0] === 'family') return renderFamilyPage(root, state.site);
+    if (seg[0] === 'vip') return renderVipPage(root, state.site, { tab: params.get('tab') || 'plans' });
     if (seg[0] === 'join') return pageJoin(root, params.get('code') || '');
     if (seg[0] === 'u') return pageUserProfile(root, seg[1]);
     return page404(root);
@@ -1170,11 +1194,13 @@ async function pageProfile(root, tab) {
   );
 
   // Tab
+  const monetize = (state.site && state.site.monetize) || {};
   const tabs = [
     { id: 'info', label: '资料设置' },
     { id: 'security', label: '账号安全' },
     { id: 'comments', label: '我的评论' },
-  ];
+    monetize.enabled ? { id: 'orders', label: '我的订单' } : null,
+  ].filter(Boolean);
   const bar = h('div', { class: 'tab-bar' });
   tabs.forEach((t) => bar.appendChild(
     h('button', { class: tab === t.id ? 'on' : '', text: t.label, onclick: () => go('/profile?tab=' + t.id) })
@@ -1186,6 +1212,7 @@ async function pageProfile(root, tab) {
 
   if (tab === 'info') renderInfoTab(panel, u, root);
   else if (tab === 'security') renderSecurityTab(panel, u);
+  else if (tab === 'orders') renderVipPage(panel, state.site, { tab: 'orders' });
   else renderMyComments(panel);
 
   document.title = '个人中心 · ' + (state.site.siteName || '慈云影视');

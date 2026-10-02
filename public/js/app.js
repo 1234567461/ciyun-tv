@@ -1321,37 +1321,101 @@ async function pageVod(root, srcId, vodId) {
   const epBox = h('div', { class: 'ep-box' });
   wrap.appendChild(epBox);
 
+  const vodGuid = '#/vod/' + srcId + '/' + vodId;
+  const vodKey = 'vod:' + srcId + ':' + vodId;
+
+  // 恢复上次观看进度（定位到对应线路/集）
+  const saved = history.getPos(vodKey);
+  if (saved) {
+    if (saved.lineIndex != null && lines[saved.lineIndex]) curLine = saved.lineIndex;
+    if (saved.epIndex != null && lines[curLine] && lines[curLine].episodes[saved.epIndex]) {
+      curEp = saved.epIndex;
+    }
+  }
+
   function renderEps() {
     epBox.innerHTML = '';
+    const total = lines[curLine].episodes.length;
     epBox.appendChild(h('div', { class: 'section-title', style: { marginBottom: '12px' } }, [
       h('span', { class: 'icon', text: '🎞️' }),
-      h('span', { text: '选集（' + lines[curLine].episodes.length + '）' }),
+      h('span', { text: '选集（' + total + '）' }),
+      // 当前播放进度提示：第 N 集 / 共 M 集 · 看到 12:34
+      saved && saved.epIndex === curEp && saved.time > 5
+        ? h('span', { class: 'ep-resume-tip', text: '上次看到 ' + history.fmtTime(saved.time) })
+        : null,
     ]));
     const grid = h('div', { class: 'ep-grid' });
     lines[curLine].episodes.forEach((ep, i) => {
+      const isNow = i === curEp;
+      const isSeen = saved && i === saved.epIndex && saved.time > 5;
       grid.appendChild(h('button', {
-        class: 'ep-chip' + (i === curEp ? ' on' : ''),
+        class: 'ep-chip' + (isNow ? ' on' : '') + (isSeen ? ' seen' : ''),
         text: ep.name || String(i + 1),
+        title: isSeen ? '上次看到 ' + history.fmtTime(saved.time) : (ep.name || ''),
         onclick: () => { curEp = i; switchEp(); },
       }));
     });
     epBox.appendChild(grid);
   }
 
+  /** 实时把当前进度写入本地（节流 3s，避免高频写 localStorage） */
+  let lastSaveTs = 0;
+  function saveProgress(force = false) {
+    const now = Date.now();
+    if (!force && now - lastSaveTs < 3000) return;
+    lastSaveTs = now;
+    let t = 0;
+    try {
+      if (player && player.video) t = player.video.currentTime || 0;
+    } catch { /* 播放器未就绪 */ }
+    history.savePos(vodKey, {
+      epIndex: curEp,
+      epName: (lines[curLine] && lines[curLine].episodes[curEp] || {}).name || '',
+      time: t,
+      lineIndex: curLine,
+    });
+  }
+  const saveTimer = setInterval(() => saveProgress(), 5000);
+  // 离开页面立即落盘
+  const onLeave = () => { saveProgress(true); clearInterval(saveTimer); window.removeEventListener('beforeunload', onLeave); };
+  window.addEventListener('beforeunload', onLeave);
+
   function switchEp() {
+    saveProgress(true);                   // 切集前先存住上一集进度
     if (player && player.destroy) { try { player.destroy(); } catch {} }
     playerHost.innerHTML = '';
+
+    // 只有「回到同一集」才续播；跨集切换从头播
+    const sameEp = saved && saved.epIndex === curEp && saved.lineIndex === curLine;
+    const seekTo = sameEp && saved.time > 5 ? saved.time : 0;
+
     player = new Player(playerHost, {
       lines: [{ id: 'main', name: lines[curLine].name, type: 'hls', url: proxied(playUrl()) }],
       title: epTitle(),
       poster: info.image,
       autoplay: true,
       autoFailover: true,
+      // 进度键按「影片 + 集」区分，保证每集独立记忆
+      guid: vodKey + ':' + curLine + ':' + curEp,
+      startTime: seekTo,                  // 从上次位置续播
       onEnded: () => {
+        history.clearPos(vodKey);         // 看完本集 → 清进度，下一集从头
         if (curEp < lines[curLine].episodes.length - 1) { curEp += 1; switchEp(); }
       },
     });
-    playerHost.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // 记录观看历史（含进度信息）
+    history.add({
+      guid: vodKey,
+      title: detail.name || '影片',
+      image: detail.pic || '',
+      url: vodGuid,
+      epIndex: curEp,
+      epName: (lines[curLine].episodes[curEp] || {}).name || '',
+      time: seekTo,
+    });
+
+    if (seekTo > 5) toast('已从上次位置 ' + history.fmtTime(seekTo) + ' 继续播放', 'info');
+    if (!sameEp) playerHost.scrollIntoView({ behavior: 'smooth', block: 'start' });
     renderEps();
     renderLines(curLine);
   }

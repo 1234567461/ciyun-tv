@@ -131,7 +131,7 @@ export const fav = {
   remove(guid) { ls.set('favs', this.list().filter((x) => x.guid !== guid)); },
 };
 
-/** 观看历史 */
+/** 观看历史（含播放进度：看到第几集、第几秒） */
 export const history = {
   list() { return ls.get('history', []); },
   add(item) {
@@ -139,6 +139,51 @@ export const history = {
     arr.unshift({ ...item, ts: Date.now() });
     ls.set('history', arr.slice(0, 120));
   },
+
+  /**
+   * 记录播放进度。
+   * @param {string} guid 影片唯一标识
+   * @param {{epIndex?:number, epName?:string, time?:number}} pos
+   */
+  savePos(guid, pos = {}) {
+    const all = ls.get('positions', {});
+    const prev = all[guid] || {};
+    all[guid] = {
+      epIndex: pos.epIndex != null ? pos.epIndex : (prev.epIndex || 0),
+      epName: pos.epName != null ? pos.epName : (prev.epName || ''),
+      time: pos.time != null ? pos.time : (prev.time || 0),
+      lineIndex: pos.lineIndex != null ? pos.lineIndex : (prev.lineIndex || 0),
+      ts: Date.now(),
+    };
+    ls.set('positions', all);
+  },
+
+  /** 读取播放进度；无记录返回 null */
+  getPos(guid) {
+    const all = ls.get('positions', {});
+    const p = all[guid];
+    if (!p) return null;
+    // 超过 60 天自动失效，避免陈旧记录误导续播
+    if (p.ts && Date.now() - p.ts > 60 * 86400000) return null;
+    return p;
+  },
+
+  /** 清空某片的进度（看完时调用） */
+  clearPos(guid) {
+    const all = ls.get('positions', {});
+    if (all[guid]) { delete all[guid]; ls.set('positions', all); }
+  },
+
+  /** 格式化秒数为 12:34 / 1:02:34 */
+  fmtTime(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    const p = (n) => String(n).padStart(2, '0');
+    return h ? `${h}:${p(m)}:${p(ss)}` : `${m}:${p(ss)}`;
+  },
+
   clear() { ls.del('history'); },
 };
 

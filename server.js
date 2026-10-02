@@ -3911,7 +3911,31 @@ if (require.main === module) {
     console.log('  └───────────────────────────────────────────────┘');
     console.log('');
     warmupLive();
+    warmupCategories();
   });
+}
+
+/**
+ * 源分类预热
+ * ------------------------------------------------------------
+ * 分类表里带有「有害分类 ID」的判定结果（内容过滤依赖它）。
+ * 启动时先拉一遍，保证列表/详情接口的内容拦截即时生效，
+ * 同时让前端首屏能直接命中分类缓存。
+ */
+async function warmupCategories() {
+  try {
+    const list = (store.sources || []).filter(
+      (s) => s && s.id && s.enabled !== false && !String(s.type || '').startsWith('cctv')
+    );
+    let ok = 0;
+    for (const s of list) {
+      try {
+        await sources.call(s, 'categories');
+        ok++;
+      } catch { /* 单个源失败不影响其他 */ }
+    }
+    if (ok) console.log(`  [预热] 采集源分类就绪：${ok}/${list.length} 个源（含内容过滤名单）`);
+  } catch { /* 预热失败不影响服务 */ }
 }
 
 /**

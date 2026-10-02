@@ -1,0 +1,2918 @@
+{
+ "categories": [
+  {
+   "id": "news",
+   "name": "新闻时事",
+   "icon": "📰",
+   "desc": "权威新闻 · 时事评论 · 深度调查",
+   "count": 48
+  },
+  {
+   "id": "documentary",
+   "name": "纪录片",
+   "icon": "🎬",
+   "desc": "探索发现 · 人文历史 · 自然地理 · 军事",
+   "count": 60
+  },
+  {
+   "id": "movie",
+   "name": "影视剧场",
+   "icon": "🍿",
+   "desc": "电视剧 · 电影 · 影视评论",
+   "count": 4
+  },
+  {
+   "id": "anime",
+   "name": "动画少儿",
+   "icon": "🧸",
+   "desc": "动画片 · 少儿节目 · 亲子",
+   "count": 20
+  },
+  {
+   "id": "variety",
+   "name": "综艺娱乐",
+   "icon": "🎤",
+   "desc": "综艺晚会 · 音乐 · 访谈",
+   "count": 60
+  },
+  {
+   "id": "sports",
+   "name": "体育赛事",
+   "icon": "⚽",
+   "desc": "体育赛事 · 足球篮球 · 奥运",
+   "count": 31
+  },
+  {
+   "id": "culture",
+   "name": "文化戏曲",
+   "icon": "🏮",
+   "desc": "百家讲坛 · 戏曲 · 传统文化",
+   "count": 16
+  },
+  {
+   "id": "finance",
+   "name": "财经商业",
+   "icon": "📈",
+   "desc": "财经资讯 · 消费 · 创业",
+   "count": 7
+  },
+  {
+   "id": "life",
+   "name": "生活美食",
+   "icon": "🍜",
+   "desc": "健康养生 · 美食 · 田园 · 农业",
+   "count": 29
+  },
+  {
+   "id": "other",
+   "name": "其他",
+   "icon": "📦",
+   "desc": "综合内容",
+   "count": 1
+  }
+ ],
+ "columns": [
+  {
+   "id": "col_topc1451528971114112",
+   "name": "新闻联播",
+   "ctid": "TOPC1451528971114112",
+   "channel": "CCTV-1 综合",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451558976694518",
+   "name": "焦点访谈",
+   "ctid": "TOPC1451558976694518",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451464665008914",
+   "name": "今日说法",
+   "ctid": "TOPC1451464665008914",
+   "channel": "CCTV-1 综合",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451557052519584",
+   "name": "百家讲坛",
+   "ctid": "TOPC1451557052519584",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451540448405749",
+   "name": "今日亚洲",
+   "ctid": "TOPC1451540448405749",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451559129520755",
+   "name": "新闻直播间",
+   "ctid": "TOPC1451559129520755",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451558428005729",
+   "name": "24小时",
+   "ctid": "TOPC1451558428005729",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451557646802924",
+   "name": "健康之路",
+   "ctid": "TOPC1451557646802924",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451540389082713",
+   "name": "今日关注",
+   "ctid": "TOPC1451540389082713",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451539894330405",
+   "name": "中国新闻",
+   "ctid": "TOPC1451539894330405",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558779639282",
+   "name": "午夜新闻",
+   "ctid": "TOPC1451558779639282",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558496100826",
+   "name": "朝闻天下",
+   "ctid": "TOPC1451558496100826",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451543462858283",
+   "name": "一线",
+   "ctid": "TOPC1451543462858283",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451543228296920",
+   "name": "天网",
+   "ctid": "TOPC1451543228296920",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451557893544236",
+   "name": "探索·发现",
+   "ctid": "TOPC1451557893544236",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451559025546574",
+   "name": "动画大放映",
+   "ctid": "TOPC1451559025546574",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451541414450906",
+   "name": "精彩音乐汇",
+   "ctid": "TOPC1451541414450906",
+   "channel": "CCTV-15 音乐",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1575253587571324",
+   "name": "跟着书本去旅行",
+   "ctid": "TOPC1575253587571324",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451540328102649",
+   "name": "海峡两岸",
+   "ctid": "TOPC1451540328102649",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451530259915198",
+   "name": "第一时间",
+   "ctid": "TOPC1451530259915198",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451528792881669",
+   "name": "晚间新闻",
+   "ctid": "TOPC1451528792881669",
+   "channel": "CCTV-1 综合",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451378967257534",
+   "name": "动物世界",
+   "ctid": "TOPC1451378967257534",
+   "channel": "CCTV-1 综合",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451354597100320",
+   "name": "中国电影报道",
+   "ctid": "TOPC1451354597100320",
+   "channel": "CCTV-6 电影",
+   "total": 1000,
+   "category": "movie",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451558858788377",
+   "name": "共同关注",
+   "ctid": "TOPC1451558858788377",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451525103989666",
+   "name": "人与自然",
+   "ctid": "TOPC1451525103989666",
+   "channel": "CCTV-1 综合",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1571217727564820",
+   "name": "普法剧场",
+   "ctid": "TOPC1571217727564820",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558532019883",
+   "name": "东方时空",
+   "ctid": "TOPC1451558532019883",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451526164984187",
+   "name": "防务新观察",
+   "ctid": "TOPC1451526164984187",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451558856402351",
+   "name": "CCTV空中剧院",
+   "ctid": "TOPC1451558856402351",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451558590627940",
+   "name": "法治在线",
+   "ctid": "TOPC1451558590627940",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451541994820527",
+   "name": "民歌·中国",
+   "ctid": "TOPC1451541994820527",
+   "channel": "CCTV-15 音乐",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1453100395512779",
+   "name": "正点财经",
+   "ctid": "TOPC1453100395512779",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451550970356385",
+   "name": "体坛快讯",
+   "ctid": "TOPC1451550970356385",
+   "channel": "CCTV-5 体育",
+   "total": 1000,
+   "category": "sports",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451557421544786",
+   "name": "地理·中国",
+   "ctid": "TOPC1451557421544786",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559097947700",
+   "name": "新闻30分",
+   "ctid": "TOPC1451559097947700",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571034705435323",
+   "name": "今日环球",
+   "ctid": "TOPC1571034705435323",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451469943519994",
+   "name": "星推荐",
+   "ctid": "TOPC1451469943519994",
+   "channel": "CCTV-8 电视剧",
+   "total": 1000,
+   "category": "movie",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451541349400938",
+   "name": "远方的家",
+   "ctid": "TOPC1451541349400938",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451534421925242",
+   "name": "CCTV音乐厅",
+   "ctid": "TOPC1451534421925242",
+   "channel": "CCTV-15 音乐",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451533782742171",
+   "name": "经济信息联播",
+   "ctid": "TOPC1451533782742171",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559066181661",
+   "name": "新闻1+1",
+   "ctid": "TOPC1451559066181661",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451378857272262",
+   "name": "第一动画乐园",
+   "ctid": "TOPC1451378857272262",
+   "channel": "CCTV-1 综合",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451546588784893",
+   "name": "生活圈",
+   "ctid": "TOPC1451546588784893",
+   "channel": "CCTV-1 综合",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451526037568184",
+   "name": "生活提示",
+   "ctid": "TOPC1451526037568184",
+   "channel": "CCTV-1 综合",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451533652476962",
+   "name": "经济半小时",
+   "ctid": "TOPC1451533652476962",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451531385787654",
+   "name": "天下财经",
+   "ctid": "TOPC1451531385787654",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451532939300997",
+   "name": "回家吃饭",
+   "ctid": "TOPC1451532939300997",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451534775834896",
+   "name": "消费主张",
+   "ctid": "TOPC1451534775834896",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "finance",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451538686034772",
+   "name": "央视财经评论",
+   "ctid": "TOPC1451538686034772",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "finance",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451534118159896",
+   "name": "生财有道",
+   "ctid": "TOPC1451534118159896",
+   "channel": "CCTV-2 财经",
+   "total": 1000,
+   "category": "finance",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451535663610626",
+   "name": "天天把歌唱",
+   "ctid": "TOPC1451535663610626",
+   "channel": "CCTV-3 综艺",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451467940101208",
+   "name": "非常6+1",
+   "ctid": "TOPC1451467940101208",
+   "channel": "CCTV-3 综艺",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451466375438815",
+   "name": "文化十分",
+   "ctid": "TOPC1451466375438815",
+   "channel": "CCTV-3 综艺",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1473235107169415",
+   "name": "国家记忆",
+   "ctid": "TOPC1473235107169415",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542134053698",
+   "name": "走遍中国",
+   "ctid": "TOPC1451542134053698",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451539822927345",
+   "name": "华人世界",
+   "ctid": "TOPC1451539822927345",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451551426170389",
+   "name": "体育新闻",
+   "ctid": "TOPC1451551426170389",
+   "channel": "CCTV-5 体育",
+   "total": 1000,
+   "category": "sports",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451551371554333",
+   "name": "体育世界",
+   "ctid": "TOPC1451551371554333",
+   "channel": "CCTV-5 体育",
+   "total": 1000,
+   "category": "sports",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451549599140203",
+   "name": "健身动起来",
+   "ctid": "TOPC1451549599140203",
+   "channel": "CCTV-5 体育",
+   "total": 1000,
+   "category": "sports",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451551258388672",
+   "name": "体坛晨报",
+   "ctid": "TOPC1451551258388672",
+   "channel": "CCTV-5 体育",
+   "total": 1000,
+   "category": "sports",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1470713254980521",
+   "name": "今日影评",
+   "ctid": "TOPC1470713254980521",
+   "channel": "CCTV-6 电影",
+   "total": 1000,
+   "category": "movie",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451527941788652",
+   "name": "军事报道",
+   "ctid": "TOPC1451527941788652",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564109254301161",
+   "name": "正午国防军事",
+   "ctid": "TOPC1564109254301161",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564109128610932",
+   "name": "国防军事早报",
+   "ctid": "TOPC1564109128610932",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451527993718730",
+   "name": "军事纪实",
+   "ctid": "TOPC1451527993718730",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564110696628209",
+   "name": "兵器面面观",
+   "ctid": "TOPC1564110696628209",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564110396694880",
+   "name": "世界战史",
+   "ctid": "TOPC1564110396694880",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1578551434601482",
+   "name": "国防故事",
+   "ctid": "TOPC1578551434601482",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564110222559767",
+   "name": "国防微视频-军歌嘹亮",
+   "ctid": "TOPC1564110222559767",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564110834985329",
+   "name": "五星剧场",
+   "ctid": "TOPC1564110834985329",
+   "channel": "CCTV-7 国防军事",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1482483166133803",
+   "name": "味道",
+   "ctid": "TOPC1482483166133803",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451557523542854",
+   "name": "读书",
+   "ctid": "TOPC1451557523542854",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570875218228998",
+   "name": "创新进行时",
+   "ctid": "TOPC1570875218228998",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1574995326079121",
+   "name": "百家说故事",
+   "ctid": "TOPC1574995326079121",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570874587435537",
+   "name": "时尚科技秀",
+   "ctid": "TOPC1570874587435537",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570780618796536",
+   "name": "人物·故事",
+   "ctid": "TOPC1570780618796536",
+   "channel": "CCTV-10 科教",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558728003217",
+   "name": "影视剧场",
+   "ctid": "TOPC1451558728003217",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451558399948678",
+   "name": "九州大戏台",
+   "ctid": "TOPC1451558399948678",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451558769767256",
+   "name": "中国京剧音配像精粹",
+   "ctid": "TOPC1451558769767256",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1626832834318986",
+   "name": "中国戏曲像音像集萃",
+   "ctid": "TOPC1626832834318986",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1597825254395109",
+   "name": "典藏",
+   "ctid": "TOPC1597825254395109",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451558484007800",
+   "name": "梨园闯关我挂帅",
+   "ctid": "TOPC1451558484007800",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558552047910",
+   "name": "青春戏苑",
+   "ctid": "TOPC1451558552047910",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1579401761622774",
+   "name": "名家书场",
+   "ctid": "TOPC1579401761622774",
+   "channel": "CCTV-11 戏曲",
+   "total": 1000,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451543168050863",
+   "name": "中国法治观察",
+   "ctid": "TOPC1451543168050863",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571040589483598",
+   "name": "生命线",
+   "ctid": "TOPC1571040589483598",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542784285432",
+   "name": "道德观察",
+   "ctid": "TOPC1451542784285432",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451543312252987",
+   "name": "夕阳红",
+   "ctid": "TOPC1451543312252987",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542933238628",
+   "name": "见证",
+   "ctid": "TOPC1451542933238628",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451543426689237",
+   "name": "夜线",
+   "ctid": "TOPC1451543426689237",
+   "channel": "CCTV-12 社会与法",
+   "total": 1000,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558926200436",
+   "name": "环球视线",
+   "ctid": "TOPC1451558926200436",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558887804404",
+   "name": "国际时讯",
+   "ctid": "TOPC1451558887804404",
+   "channel": "CCTV-13 新闻",
+   "total": 1000,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559836238828",
+   "name": "周末动画片",
+   "ctid": "TOPC1451559836238828",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451447359806385",
+   "name": "智慧树",
+   "ctid": "TOPC1451447359806385",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451559205464876",
+   "name": "小小智慧树",
+   "ctid": "TOPC1451559205464876",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451559603261584",
+   "name": "新闻袋袋裤",
+   "ctid": "TOPC1451559603261584",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451559448233349",
+   "name": "动漫世界",
+   "ctid": "TOPC1451559448233349",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558929123462",
+   "name": "大风车",
+   "ctid": "TOPC1451558929123462",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558967135492",
+   "name": "大手牵小手",
+   "ctid": "TOPC1451558967135492",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559479171411",
+   "name": "快乐体验",
+   "ctid": "TOPC1451559479171411",
+   "channel": "CCTV-14 少儿",
+   "total": 1000,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542397206110",
+   "name": "中国音乐电视",
+   "ctid": "TOPC1451542397206110",
+   "channel": "CCTV-15 音乐",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451534503915324",
+   "name": "风华国乐",
+   "ctid": "TOPC1451534503915324",
+   "channel": "CCTV-15 音乐",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542346007956",
+   "name": "影视留声机",
+   "ctid": "TOPC1451542346007956",
+   "channel": "CCTV-15 音乐",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542132455743",
+   "name": "一起音乐吧",
+   "ctid": "TOPC1451542132455743",
+   "channel": "CCTV-15 音乐",
+   "total": 1000,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1568966325430648",
+   "name": "谁知盘中餐",
+   "ctid": "TOPC1568966325430648",
+   "channel": "CCTV-17农业农村",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1600745974233265",
+   "name": "三农群英汇",
+   "ctid": "TOPC1600745974233265",
+   "channel": "CCTV-17农业农村",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1568949200635957",
+   "name": "农业气象",
+   "ctid": "TOPC1568949200635957",
+   "channel": "CCTV-17农业农村",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1600746045741952",
+   "name": "中国三农报道",
+   "ctid": "TOPC1600746045741952",
+   "channel": "CCTV-17农业农村",
+   "total": 1000,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451550531682936",
+   "name": "棋牌乐",
+   "ctid": "TOPC1451550531682936",
+   "channel": "CCTV-5 体育",
+   "total": 966,
+   "category": "sports",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1573528152700717",
+   "name": "风车剧场",
+   "ctid": "TOPC1573528152700717",
+   "channel": "CCTV-14 少儿",
+   "total": 960,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451528087494889",
+   "name": "军事科技",
+   "ctid": "TOPC1451528087494889",
+   "channel": "CCTV-7 国防军事",
+   "total": 955,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1601348042760302",
+   "name": "中国文艺报道",
+   "ctid": "TOPC1601348042760302",
+   "channel": "CCTV-3 综艺",
+   "total": 947,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559569040502",
+   "name": "七巧板",
+   "ctid": "TOPC1451559569040502",
+   "channel": "CCTV-14 少儿",
+   "total": 936,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1684219008168788",
+   "name": "田园帮帮团",
+   "ctid": "TOPC1684219008168788",
+   "channel": "CCTV-17农业农村",
+   "total": 934,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558687534149",
+   "name": "世界周刊",
+   "ctid": "TOPC1451558687534149",
+   "channel": "CCTV-13 新闻",
+   "total": 880,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570025984977611",
+   "name": "中国节拍",
+   "ctid": "TOPC1570025984977611",
+   "channel": "CCTV-15 音乐",
+   "total": 879,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542061864640",
+   "name": "全球中文音乐榜上榜",
+   "ctid": "TOPC1451542061864640",
+   "channel": "CCTV-15 音乐",
+   "total": 876,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451466072378425",
+   "name": "人口",
+   "ctid": "TOPC1451466072378425",
+   "channel": "CCTV-1 综合",
+   "total": 862,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559666055645",
+   "name": "音乐快递",
+   "ctid": "TOPC1451559666055645",
+   "channel": "CCTV-14 少儿",
+   "total": 859,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559378830189",
+   "name": "动感特区",
+   "ctid": "TOPC1451559378830189",
+   "channel": "CCTV-14 少儿",
+   "total": 855,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1592552941644815",
+   "name": "中国影像方志",
+   "ctid": "TOPC1592552941644815",
+   "channel": "CCTV-10 科教",
+   "total": 847,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559633994614",
+   "name": "异想天开",
+   "ctid": "TOPC1451559633994614",
+   "channel": "CCTV-14 少儿",
+   "total": 845,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451540709098112",
+   "name": "深度国际",
+   "ctid": "TOPC1451540709098112",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 832,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451538759798817",
+   "name": "一槌定音",
+   "ctid": "TOPC1451538759798817",
+   "channel": "CCTV-2 财经",
+   "total": 827,
+   "category": "finance",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451530382483536",
+   "name": "对话",
+   "ctid": "TOPC1451530382483536",
+   "channel": "CCTV-2 财经",
+   "total": 819,
+   "category": "finance",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1451559180488841",
+   "name": "新闻周刊",
+   "ctid": "TOPC1451559180488841",
+   "channel": "CCTV-13 新闻",
+   "total": 805,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1684219090478947",
+   "name": "共富经",
+   "ctid": "TOPC1684219090478947",
+   "channel": "CCTV-17农业农村",
+   "total": 802,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559038345600",
+   "name": "面对面",
+   "ctid": "TOPC1451559038345600",
+   "channel": "CCTV-13 新闻",
+   "total": 794,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559695702690",
+   "name": "英雄出少年",
+   "ctid": "TOPC1451559695702690",
+   "channel": "CCTV-14 少儿",
+   "total": 790,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559756374759",
+   "name": "智力快车",
+   "ctid": "TOPC1451559756374759",
+   "channel": "CCTV-14 少儿",
+   "total": 776,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558650605123",
+   "name": "每周质量报告",
+   "ctid": "TOPC1451558650605123",
+   "channel": "CCTV-13 新闻",
+   "total": 774,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451547605511387",
+   "name": "舞蹈世界",
+   "ctid": "TOPC1451547605511387",
+   "channel": "CCTV-3 综艺",
+   "total": 762,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451984638791216",
+   "name": "向幸福出发",
+   "ctid": "TOPC1451984638791216",
+   "channel": "CCTV-3 综艺",
+   "total": 750,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558819463311",
+   "name": "新闻调查",
+   "ctid": "TOPC1451558819463311",
+   "channel": "CCTV-13 新闻",
+   "total": 736,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451543346581129",
+   "name": "小区大事",
+   "ctid": "TOPC1451543346581129",
+   "channel": "CCTV-12 社会与法",
+   "total": 735,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542308412911",
+   "name": "音乐人生",
+   "ctid": "TOPC1451542308412911",
+   "channel": "CCTV-15 音乐",
+   "total": 732,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1685611193657241",
+   "name": "超级农人秀",
+   "ctid": "TOPC1685611193657241",
+   "channel": "CCTV-17农业农村",
+   "total": 730,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1462849800640766",
+   "name": "音乐公开课",
+   "ctid": "TOPC1462849800640766",
+   "channel": "CCTV-15 音乐",
+   "total": 725,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451558692971175",
+   "name": "一鸣惊人",
+   "ctid": "TOPC1451558692971175",
+   "channel": "CCTV-11 戏曲",
+   "total": 713,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451541538046196",
+   "name": "乐游天下",
+   "ctid": "TOPC1451541538046196",
+   "channel": "CCTV-15 音乐",
+   "total": 710,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570876640457386",
+   "name": "解码科技史",
+   "ctid": "TOPC1570876640457386",
+   "channel": "CCTV-10 科教",
+   "total": 708,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451526241359341",
+   "name": "讲武堂",
+   "ctid": "TOPC1451526241359341",
+   "channel": "CCTV-7 国防军事",
+   "total": 657,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451465894294259",
+   "name": "开门大吉",
+   "ctid": "TOPC1451465894294259",
+   "channel": "CCTV-3 综艺",
+   "total": 656,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451543382680164",
+   "name": "心理访谈",
+   "ctid": "TOPC1451543382680164",
+   "channel": "CCTV-12 社会与法",
+   "total": 651,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451467829851129",
+   "name": "越战越勇",
+   "ctid": "TOPC1451467829851129",
+   "channel": "CCTV-3 综艺",
+   "total": 648,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1568966155566515",
+   "name": "乡理乡亲",
+   "ctid": "TOPC1568966155566515",
+   "channel": "CCTV-17农业农村",
+   "total": 646,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451530272783201",
+   "name": "谁是终极英雄",
+   "ctid": "TOPC1451530272783201",
+   "channel": "CCTV-7 国防军事",
+   "total": 641,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1575602995944674",
+   "name": "军事纪录",
+   "ctid": "TOPC1575602995944674",
+   "channel": "CCTV-7 国防军事",
+   "total": 633,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570026172793162",
+   "name": "合唱先锋",
+   "ctid": "TOPC1570026172793162",
+   "channel": "CCTV-15 音乐",
+   "total": 627,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1576631973420833",
+   "name": "透视新科技",
+   "ctid": "TOPC1576631973420833",
+   "channel": "CCTV-10 科教",
+   "total": 626,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451984851125433",
+   "name": "艺览天下",
+   "ctid": "TOPC1451984851125433",
+   "channel": "CCTV-3 综艺",
+   "total": 620,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451467630488780",
+   "name": "星光大道",
+   "ctid": "TOPC1451467630488780",
+   "channel": "CCTV-3 综艺",
+   "total": 608,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1508747509633692",
+   "name": "角儿来了",
+   "ctid": "TOPC1508747509633692",
+   "channel": "CCTV-11 戏曲",
+   "total": 592,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1528430065133683",
+   "name": "乐享汇",
+   "ctid": "TOPC1528430065133683",
+   "channel": "CCTV-15 音乐",
+   "total": 588,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451559131256781",
+   "name": "看我72变",
+   "ctid": "TOPC1451559131256781",
+   "channel": "CCTV-14 少儿",
+   "total": 587,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1684218801368675",
+   "name": "三农长短说",
+   "ctid": "TOPC1684218801368675",
+   "channel": "CCTV-17农业农村",
+   "total": 582,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1568966472372643",
+   "name": "大地讲堂",
+   "ctid": "TOPC1568966472372643",
+   "channel": "CCTV-17农业农村",
+   "total": 550,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451984801613379",
+   "name": "幸福账单",
+   "ctid": "TOPC1451984801613379",
+   "channel": "CCTV-3 综艺",
+   "total": 546,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451535575561597",
+   "name": "回声嘹亮",
+   "ctid": "TOPC1451535575561597",
+   "channel": "CCTV-3 综艺",
+   "total": 542,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1563178586782832",
+   "name": "乡土中国",
+   "ctid": "TOPC1563178586782832",
+   "channel": "CCTV-17农业农村",
+   "total": 533,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451549958391444",
+   "name": "篮球公园",
+   "ctid": "TOPC1451549958391444",
+   "channel": "CCTV-5 体育",
+   "total": 531,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451552481492403",
+   "name": "足球之夜",
+   "ctid": "TOPC1451552481492403",
+   "channel": "CCTV-5 体育",
+   "total": 517,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1467078494968390",
+   "name": "职场健康课",
+   "ctid": "TOPC1467078494968390",
+   "channel": "CCTV-2 财经",
+   "total": 512,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451551830518827",
+   "name": "体谈",
+   "ctid": "TOPC1451551830518827",
+   "channel": "CCTV-5 体育",
+   "total": 506,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1452063879122866",
+   "name": "正大综艺·动物来啦",
+   "ctid": "TOPC1452063879122866",
+   "channel": "CCTV-1 综合",
+   "total": 487,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542672944335",
+   "name": "忏悔录",
+   "ctid": "TOPC1451542672944335",
+   "channel": "CCTV-12 社会与法",
+   "total": 483,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564109356650207",
+   "name": "军事制高点",
+   "ctid": "TOPC1564109356650207",
+   "channel": "CCTV-7 国防军事",
+   "total": 480,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1462504102545692",
+   "name": "军情时间到",
+   "ctid": "TOPC1462504102545692",
+   "channel": "CCTV-13 新闻",
+   "total": 479,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451464884159276",
+   "name": "开讲啦",
+   "ctid": "TOPC1451464884159276",
+   "channel": "CCTV-1 综合",
+   "total": 478,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451468496522494",
+   "name": "黄金100秒",
+   "ctid": "TOPC1451468496522494",
+   "channel": "CCTV-3 综艺",
+   "total": 478,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451538709371329",
+   "name": "我爱满堂彩",
+   "ctid": "TOPC1451538709371329",
+   "channel": "CCTV-3 综艺",
+   "total": 475,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451551777876756",
+   "name": "天下足球",
+   "ctid": "TOPC1451551777876756",
+   "channel": "CCTV-5 体育",
+   "total": 461,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1634807797280923",
+   "name": "艺术里的奥林匹克",
+   "ctid": "TOPC1634807797280923",
+   "channel": "CCTV-16奥林匹克",
+   "total": 452,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571021251454875",
+   "name": "考古公开课",
+   "ctid": "TOPC1571021251454875",
+   "channel": "CCTV-10 科教",
+   "total": 427,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1579401989187953",
+   "name": "宝贝亮相吧",
+   "ctid": "TOPC1579401989187953",
+   "channel": "CCTV-11 戏曲",
+   "total": 427,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1514182710380601",
+   "name": "中国经济大讲堂",
+   "ctid": "TOPC1514182710380601",
+   "channel": "CCTV-2 财经",
+   "total": 414,
+   "category": "finance",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1571301089686775",
+   "name": "现在开庭",
+   "ctid": "TOPC1571301089686775",
+   "channel": "CCTV-12 社会与法",
+   "total": 397,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564131644145429",
+   "name": "军迷行天下",
+   "ctid": "TOPC1564131644145429",
+   "channel": "CCTV-7 国防军事",
+   "total": 368,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564109722559395",
+   "name": "老兵你好",
+   "ctid": "TOPC1564109722559395",
+   "channel": "CCTV-7 国防军事",
+   "total": 368,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571021323137369",
+   "name": "科幻地带",
+   "ctid": "TOPC1571021323137369",
+   "channel": "CCTV-10 科教",
+   "total": 365,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1495184612807684",
+   "name": "剧说很好看",
+   "ctid": "TOPC1495184612807684",
+   "channel": "CCTV-8 电视剧",
+   "total": 361,
+   "category": "movie",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1571021385508957",
+   "name": "科学动物园",
+   "ctid": "TOPC1571021385508957",
+   "channel": "CCTV-10 科教",
+   "total": 358,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564109434999268",
+   "name": "军武零距离",
+   "ctid": "TOPC1564109434999268",
+   "channel": "CCTV-7 国防军事",
+   "total": 357,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451985071887935",
+   "name": "综艺盛典",
+   "ctid": "TOPC1451985071887935",
+   "channel": "CCTV-3 综艺",
+   "total": 351,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571646819318596",
+   "name": "中国缘",
+   "ctid": "TOPC1571646819318596",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 349,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564110136027687",
+   "name": "军营的味道",
+   "ctid": "TOPC1564110136027687",
+   "channel": "CCTV-7 国防军事",
+   "total": 349,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571021159595290",
+   "name": "实验现场",
+   "ctid": "TOPC1571021159595290",
+   "channel": "CCTV-10 科教",
+   "total": 348,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571034869935436",
+   "name": "国宝·发现",
+   "ctid": "TOPC1571034869935436",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 345,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571535828826169",
+   "name": "法治深壹度",
+   "ctid": "TOPC1571535828826169",
+   "channel": "CCTV-12 社会与法",
+   "total": 338,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571646754621556",
+   "name": "华人故事",
+   "ctid": "TOPC1571646754621556",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 335,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1733885609220532",
+   "name": "运动一起赢",
+   "ctid": "TOPC1733885609220532",
+   "channel": "CCTV-5 体育",
+   "total": 331,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451525460925648",
+   "name": "中华民族",
+   "ctid": "TOPC1451525460925648",
+   "channel": "CCTV-1 综合",
+   "total": 318,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451467540329692",
+   "name": "2016我要上春晚",
+   "ctid": "TOPC1451467540329692",
+   "channel": "CCTV-3 综艺",
+   "total": 301,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451467540329692",
+   "name": "我要上春晚",
+   "ctid": "TOPC1451467540329692",
+   "channel": "CCTV-3 综艺",
+   "total": 301,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1462860742367700",
+   "name": "北京2022",
+   "ctid": "TOPC1462860742367700",
+   "channel": "CCTV-16奥林匹克",
+   "total": 295,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451549411228903",
+   "name": "冠军欧洲",
+   "ctid": "TOPC1451549411228903",
+   "channel": "CCTV-5 体育",
+   "total": 286,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1609904361007481",
+   "name": "鲁健访谈",
+   "ctid": "TOPC1609904361007481",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 261,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570026397101703",
+   "name": "聆听时刻",
+   "ctid": "TOPC1570026397101703",
+   "channel": "CCTV-15 音乐",
+   "total": 256,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571217374070848",
+   "name": "高墙内外",
+   "ctid": "TOPC1571217374070848",
+   "channel": "CCTV-12 社会与法",
+   "total": 252,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451550484638864",
+   "name": "欧冠开场哨",
+   "ctid": "TOPC1451550484638864",
+   "channel": "CCTV-5 体育",
+   "total": 242,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1571300682556971",
+   "name": "环球综艺秀",
+   "ctid": "TOPC1571300682556971",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 240,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1582272259917160",
+   "name": "我的艺术清单",
+   "ctid": "TOPC1582272259917160",
+   "channel": "CCTV-3 综艺",
+   "total": 230,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1634808174904190",
+   "name": "奥秘无穷",
+   "ctid": "TOPC1634808174904190",
+   "channel": "CCTV-16奥林匹克",
+   "total": 201,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564110615253124",
+   "name": "第二战场",
+   "ctid": "TOPC1564110615253124",
+   "channel": "CCTV-7 国防军事",
+   "total": 200,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1665739007799851",
+   "name": "高端访谈",
+   "ctid": "TOPC1665739007799851",
+   "channel": "CCTV-13 新闻",
+   "total": 189,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570593186033488",
+   "name": "音乐周刊",
+   "ctid": "TOPC1570593186033488",
+   "channel": "CCTV-15 音乐",
+   "total": 160,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1672292475106944",
+   "name": "欢乐大猜想",
+   "ctid": "TOPC1672292475106944",
+   "channel": "CCTV-2 财经",
+   "total": 159,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1685934002051114",
+   "name": "乐游新乡村",
+   "ctid": "TOPC1685934002051114",
+   "channel": "CCTV-17农业农村",
+   "total": 159,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1718343404927731",
+   "name": "健康中国",
+   "ctid": "TOPC1718343404927731",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 152,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1719381038881688",
+   "name": "剧懂法",
+   "ctid": "TOPC1719381038881688",
+   "channel": "CCTV-12 社会与法",
+   "total": 145,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1570593464032566",
+   "name": "童声唱",
+   "ctid": "TOPC1570593464032566",
+   "channel": "CCTV-15 音乐",
+   "total": 145,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1650782829200997",
+   "name": "正大综艺",
+   "ctid": "TOPC1650782829200997",
+   "channel": "CCTV-1 综合",
+   "total": 142,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1634807873035403",
+   "name": "逐冰追雪",
+   "ctid": "TOPC1634807873035403",
+   "channel": "CCTV-16奥林匹克",
+   "total": 141,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1563179546003162",
+   "name": "乡村大舞台",
+   "ctid": "TOPC1563179546003162",
+   "channel": "CCTV-17农业农村",
+   "total": 141,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451551891055866",
+   "name": "武林大会",
+   "ctid": "TOPC1451551891055866",
+   "channel": "CCTV-5 体育",
+   "total": 133,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1476950587121943",
+   "name": "极智少年强",
+   "ctid": "TOPC1476950587121943",
+   "channel": "CCTV-14 少儿",
+   "total": 125,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1626161016006801",
+   "name": "戏曲青年说",
+   "ctid": "TOPC1626161016006801",
+   "channel": "CCTV-11 戏曲",
+   "total": 118,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451551310742737",
+   "name": "体育人间",
+   "ctid": "TOPC1451551310742737",
+   "channel": "CCTV-5 体育",
+   "total": 115,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451548615930237",
+   "name": "NBA最前线",
+   "ctid": "TOPC1451548615930237",
+   "channel": "CCTV-5 体育",
+   "total": 109,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451550589995997",
+   "name": "赛车时代",
+   "ctid": "TOPC1451550589995997",
+   "channel": "CCTV-5 体育",
+   "total": 106,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1551324792732798",
+   "name": "ATP周刊",
+   "ctid": "TOPC1551324792732798",
+   "channel": "CCTV-5+ 体育赛事",
+   "total": 104,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1736149850792733",
+   "name": "体坛零距离",
+   "ctid": "TOPC1736149850792733",
+   "channel": "CCTV-5 体育",
+   "total": 101,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451549547540149",
+   "name": "巅峰时刻",
+   "ctid": "TOPC1451549547540149",
+   "channel": "CCTV-5 体育",
+   "total": 100,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1778221720752906",
+   "name": "田野欢歌",
+   "ctid": "TOPC1778221720752906",
+   "channel": "CCTV-17农业农村",
+   "total": 97,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1711349576955351",
+   "name": "财经调查",
+   "ctid": "TOPC1711349576955351",
+   "channel": "CCTV-2 财经",
+   "total": 90,
+   "category": "finance",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1634808300961576",
+   "name": "奥林匹克人",
+   "ctid": "TOPC1634808300961576",
+   "channel": "CCTV-16奥林匹克",
+   "total": 80,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451542713421371",
+   "name": "从我做起",
+   "ctid": "TOPC1451542713421371",
+   "channel": "CCTV-12 社会与法",
+   "total": 79,
+   "category": "news",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1750997900940127",
+   "name": "时光军史馆",
+   "ctid": "TOPC1750997900940127",
+   "channel": "CCTV-7 国防军事",
+   "total": 78,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1551323337921620",
+   "name": "冰球冰球",
+   "ctid": "TOPC1551323337921620",
+   "channel": "CCTV-5+ 体育赛事",
+   "total": 74,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1703669079463775",
+   "name": "记住乡愁第十季",
+   "ctid": "TOPC1703669079463775",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 63,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1789896067170902",
+   "name": "农耕探文明",
+   "ctid": "TOPC1789896067170902",
+   "channel": "CCTV-1 综合",
+   "total": 62,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1735287978742504",
+   "name": "《记住乡愁》门楣之上",
+   "ctid": "TOPC1735287978742504",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 60,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1670828908956975",
+   "name": "记住乡愁第九季",
+   "ctid": "TOPC1670828908956975",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 60,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1640330887412898",
+   "name": "记住乡愁第八季",
+   "ctid": "TOPC1640330887412898",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 59,
+   "category": "other",
+   "enabled": true,
+   "featured": true
+  },
+  {
+   "id": "col_topc1608533695279753",
+   "name": "记住乡愁第七季",
+   "ctid": "TOPC1608533695279753",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 58,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1577672009520911",
+   "name": "记住乡愁第六季",
+   "ctid": "TOPC1577672009520911",
+   "channel": "CCTV-4 (亚洲)",
+   "total": 55,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1657505173323752",
+   "name": "了不起的戏曲",
+   "ctid": "TOPC1657505173323752",
+   "channel": "CCTV-11 戏曲",
+   "total": 53,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1790222250330774",
+   "name": "自然中国",
+   "ctid": "TOPC1790222250330774",
+   "channel": "CCTV-1 综合",
+   "total": 50,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1789024481921916",
+   "name": "非遗里的中国",
+   "ctid": "TOPC1789024481921916",
+   "channel": "CCTV-1 综合",
+   "total": 48,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1790217288720862",
+   "name": "三餐四季",
+   "ctid": "TOPC1790217288720862",
+   "channel": "CCTV-1 综合",
+   "total": 43,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1551323403033398",
+   "name": "冰天雪地",
+   "ctid": "TOPC1551323403033398",
+   "channel": "CCTV-5+ 体育赛事",
+   "total": 39,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1634807936107991",
+   "name": "五环纪事",
+   "ctid": "TOPC1634807936107991",
+   "channel": "CCTV-16奥林匹克",
+   "total": 35,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1790072496133885",
+   "name": "人文名镇",
+   "ctid": "TOPC1790072496133885",
+   "channel": "CCTV-1 综合",
+   "total": 30,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1790217825492132",
+   "name": "寻味山海",
+   "ctid": "TOPC1790217825492132",
+   "channel": "CCTV-1 综合",
+   "total": 28,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451552002869953",
+   "name": "运动大不同",
+   "ctid": "TOPC1451552002869953",
+   "channel": "CCTV-5 体育",
+   "total": 26,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1604397385056621",
+   "name": "你好生活第二季",
+   "ctid": "TOPC1604397385056621",
+   "channel": "CCTV-3 综艺",
+   "total": 25,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1627961377879898",
+   "name": "你好生活第三季",
+   "ctid": "TOPC1627961377879898",
+   "channel": "CCTV-3 综艺",
+   "total": 24,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1789613546268919",
+   "name": "简牍探中华",
+   "ctid": "TOPC1789613546268919",
+   "channel": "CCTV-1 综合",
+   "total": 23,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1788491064612407",
+   "name": "城市风华录",
+   "ctid": "TOPC1788491064612407",
+   "channel": "CCTV-1 综合",
+   "total": 22,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1611740341987572",
+   "name": "典籍里的中国",
+   "ctid": "TOPC1611740341987572",
+   "channel": "CCTV-1 综合",
+   "total": 22,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451550868295303",
+   "name": "谁是球王",
+   "ctid": "TOPC1451550868295303",
+   "channel": "CCTV-5 体育",
+   "total": 21,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1611826337610628",
+   "name": "金牌喜剧班",
+   "ctid": "TOPC1611826337610628",
+   "channel": "CCTV-3 综艺",
+   "total": 20,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451534366388377",
+   "name": "是真的吗",
+   "ctid": "TOPC1451534366388377",
+   "channel": "CCTV-2 财经",
+   "total": 18,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1789369565060673",
+   "name": "花开中国",
+   "ctid": "TOPC1789369565060673",
+   "channel": "CCTV-1 综合",
+   "total": 17,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1452063816677656",
+   "name": "挑战不可能第一季",
+   "ctid": "TOPC1452063816677656",
+   "channel": "CCTV-1 综合",
+   "total": 16,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451984995017753",
+   "name": "中国好歌曲第一季",
+   "ctid": "TOPC1451984995017753",
+   "channel": "CCTV-3 综艺",
+   "total": 16,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1547519813971570",
+   "name": "挑战不可能之加油中国",
+   "ctid": "TOPC1547519813971570",
+   "channel": "CCTV-1 综合",
+   "total": 15,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1593419181674791",
+   "name": "生活家",
+   "ctid": "TOPC1593419181674791",
+   "channel": "CCTV-2 财经",
+   "total": 15,
+   "category": "life",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1509500865106312",
+   "name": "挑战不可能第三季",
+   "ctid": "TOPC1509500865106312",
+   "channel": "CCTV-1 综合",
+   "total": 13,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1789632079886701",
+   "name": "金石探文明",
+   "ctid": "TOPC1789632079886701",
+   "channel": "CCTV-1 综合",
+   "total": 12,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1789636089444639",
+   "name": "开学第一课",
+   "ctid": "TOPC1789636089444639",
+   "channel": "CCTV-1 综合",
+   "total": 12,
+   "category": "anime",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1579169060379297",
+   "name": "挑战不可能第五季",
+   "ctid": "TOPC1579169060379297",
+   "channel": "CCTV-1 综合",
+   "total": 12,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451465326115606",
+   "name": "了不起的挑战",
+   "ctid": "TOPC1451465326115606",
+   "channel": "CCTV-1 综合",
+   "total": 12,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1636516276237257",
+   "name": "故事里的中国（第三季）",
+   "ctid": "TOPC1636516276237257",
+   "channel": "CCTV-1 综合",
+   "total": 11,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1547521714115947",
+   "name": "经典咏流传第二季",
+   "ctid": "TOPC1547521714115947",
+   "channel": "CCTV-1 综合",
+   "total": 11,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1516784350726581",
+   "name": "欢乐中国人第二季",
+   "ctid": "TOPC1516784350726581",
+   "channel": "CCTV-1 综合",
+   "total": 11,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1569729252342702",
+   "name": "故事里的中国第一季",
+   "ctid": "TOPC1569729252342702",
+   "channel": "CCTV-1 综合",
+   "total": 11,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1551324843068553",
+   "name": "约战果岭",
+   "ctid": "TOPC1551324843068553",
+   "channel": "CCTV-5+ 体育赛事",
+   "total": 11,
+   "category": "sports",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1601362002656197",
+   "name": "故事里的中国第二季",
+   "ctid": "TOPC1601362002656197",
+   "channel": "CCTV-1 综合",
+   "total": 10,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1564019920570762",
+   "name": "机智过人第三季",
+   "ctid": "TOPC1564019920570762",
+   "channel": "CCTV-1 综合",
+   "total": 10,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1487120479377477",
+   "name": "朗读者第一季",
+   "ctid": "TOPC1487120479377477",
+   "channel": "CCTV-1 综合",
+   "total": 10,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1451984149246462",
+   "name": "叮咯咙咚呛",
+   "ctid": "TOPC1451984149246462",
+   "channel": "CCTV-3 综艺",
+   "total": 9,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1649983616689859",
+   "name": "砺剑",
+   "ctid": "TOPC1649983616689859",
+   "channel": "CCTV-7 国防军事",
+   "total": 8,
+   "category": "documentary",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1513676755770201",
+   "name": "经典咏流传第一季",
+   "ctid": "TOPC1513676755770201",
+   "channel": "CCTV-1 综合",
+   "total": 6,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1461055502698314",
+   "name": "叮咯咙咚呛第二季",
+   "ctid": "TOPC1461055502698314",
+   "channel": "CCTV-3 综艺",
+   "total": 6,
+   "category": "culture",
+   "enabled": true,
+   "featured": false
+  },
+  {
+   "id": "col_topc1474277421637816",
+   "name": "挑战不可能第二季",
+   "ctid": "TOPC1474277421637816",
+   "channel": "CCTV-1 综合",
+   "total": 1,
+   "category": "variety",
+   "enabled": true,
+   "featured": false
+  }
+ ],
+ "liveChannels": [
+  {
+   "id": "cctv1",
+   "name": "CCTV-1 综合",
+   "icon": "1️⃣"
+  },
+  {
+   "id": "cctv2",
+   "name": "CCTV-2 财经",
+   "icon": "2️⃣"
+  },
+  {
+   "id": "cctv3",
+   "name": "CCTV-3 综艺",
+   "icon": "3️⃣"
+  },
+  {
+   "id": "cctv4",
+   "name": "CCTV-4 中文国际",
+   "icon": "4️⃣"
+  },
+  {
+   "id": "cctv5",
+   "name": "CCTV-5 体育",
+   "icon": "5️⃣"
+  },
+  {
+   "id": "cctv6",
+   "name": "CCTV-6 电影",
+   "icon": "6️⃣"
+  },
+  {
+   "id": "cctv7",
+   "name": "CCTV-7 国防军事",
+   "icon": "7️⃣"
+  },
+  {
+   "id": "cctv8",
+   "name": "CCTV-8 电视剧",
+   "icon": "8️⃣"
+  },
+  {
+   "id": "cctv9",
+   "name": "CCTV-9 纪录",
+   "icon": "9️⃣"
+  },
+  {
+   "id": "cctv10",
+   "name": "CCTV-10 科教",
+   "icon": "🔟"
+  },
+  {
+   "id": "cctv11",
+   "name": "CCTV-11 戏曲",
+   "icon": "🎭"
+  },
+  {
+   "id": "cctv12",
+   "name": "CCTV-12 社会与法",
+   "icon": "⚖️"
+  },
+  {
+   "id": "cctv13",
+   "name": "CCTV-13 新闻",
+   "icon": "📡"
+  },
+  {
+   "id": "cctv15",
+   "name": "CCTV-15 音乐",
+   "icon": "🎵"
+  },
+  {
+   "id": "cctv16",
+   "name": "CCTV-16 奥林匹克",
+   "icon": "🏅"
+  },
+  {
+   "id": "cctv17",
+   "name": "CCTV-17 农业农村",
+   "icon": "🌾"
+  }
+ ]
+}

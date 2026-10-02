@@ -419,6 +419,31 @@ export function renderVipPage(root, site, opts = {}) {
   }
 
   /* ==================== 支付弹窗 ==================== */
+  /** 可用渠道（兼容旧接口：无 channels 时回退到 payMethods） */
+  function payChannels(info) {
+    if (info.channels && info.channels.length) {
+      return info.channels.map((c) => ({
+        kind: 'channel',
+        id: c.id,
+        name: c.name,
+        icon: c.icon || '💳',
+        desc: c.desc || '',
+        testMode: !!c.testMode,
+        manual: c.manual || null,
+        methods: c.methods || [],
+      }));
+    }
+    // 回退：旧版 payMethods（单渠道语义）
+    return (info.payMethods || []).map((m) => ({
+      kind: 'legacy',
+      id: m.id,
+      name: m.name,
+      icon: m.icon || '💳',
+      desc: '',
+      methods: [m],
+    }));
+  }
+
   function openPay(plan) {
     if (!auth.loggedIn) { go('/login?redirect=' + encodeURIComponent('#/vip')); return; }
 
@@ -427,42 +452,93 @@ export function renderVipPage(root, site, opts = {}) {
     const balance = (info.vip && info.vip.balance) || 0;
     const canBalance = info.allowBalance !== false && balance >= plan.price;
 
-    let method = canBalance ? 'balance' : (info.payMethods[0] && info.payMethods[0].id) || 'alipay';
+    const channels = payChannels(info);
+    let chIdx = 0;
+    let methodId = '';
+    let useBalance = canBalance;
+
+    // 选中渠道的第一个可用支付方式
+    function pickMethod(c) {
+      methodId = (c.methods && c.methods[0] && c.methods[0].id) || 'alipay';
+    }
+    if (canBalance) { /* 默认走余额 */ } else if (channels.length) { pickMethod(channels[0]); }
 
     const mask = h('div', { class: 'vip-modal-mask' });
     const modal = h('div', { class: 'vip-modal' });
     mask.appendChild(modal);
 
-    const methods = [];
-    if (info.allowBalance !== false) {
-      methods.push({
-        id: 'balance', name: '余额支付', icon: '💰',
-        sub: `余额 ${cur}${balance.toFixed(2)}${balance < plan.price ? '（不足）' : ''}`,
-        disabled: balance < plan.price,
+    /* --- 支付方式区块（余额 + 渠道） --- */
+    const methodBox = h('div', { class: 'pay-methods' });
+
+    function renderMethods() {
+      methodBox.innerHTML = '';
+      const items = [];
+
+      if (info.allowBalance !== false) {
+        items.push({
+          key: 'balance', icon: '💰', name: '余额支付',
+          sub: `余额 ${cur}${balance.toFixed(2)}${balance < plan.price ? '（不足）' : ''}`,
+          disabled: balance < plan.price,
+          on: useBalance,
+          click: () => { useBalance = true; renderMethods(); },
+        });
+      }
+
+      channels.forEach((c, i) => {
+        const mName = (c.methods || []).map((m) => m.name).join(' / ');
+        items.push({
+          key: 'ch:' + i,
+          icon: c.icon,
+          name: c.name + (c.testMode ? ' · 演示' : ''),
+          sub: c.kind === 'channel'
+            ? (c.manual ? '线下转账 · 管理员确认后到账' : (mName || '在线支付'))
+            : (mName || '在线支付'),
+          on: !useBalance && chIdx === i,
+          click: () => {
+            useBalance = false;
+            chIdx = i;
+            pickMethod(c);
+            renderMethods();
+            renderSubMethods();
+          },
+        });
+      });
+
+      items.forEach((it) => {
+        const item = h('div', {
+          class: 'pay-method' + (it.on ? ' on' : '') + (it.disabled ? ' disabled' : ''),
+          onclick: () => { if (it.disabled) return toast('余额不足，请先充值', 'error'); it.click(); },
+        }, [
+          h('span', { class: 'pm-ico', text: it.icon }),
+          h('div', { class: 'pm-txt' }, [
+            h('div', { class: 'pm-name', text: it.name }),
+            it.sub ? h('div', { class: 'pm-sub', text: it.sub }) : null,
+          ]),
+          h('span', { class: 'pm-radio' }),
+        ]);
+        methodBox.appendChild(item);
       });
     }
-    (info.payMethods || []).forEach((m) => methods.push({ ...m, sub: '推荐' }));
 
-    const methodBox = h('div', { class: 'pay-methods' });
-    methods.forEach((m) => {
-      const item = h('div', {
-        class: 'pay-method' + (method === m.id ? ' on' : '') + (m.disabled ? ' disabled' : ''),
-        onclick: () => {
-          if (m.disabled) return toast('余额不足，请先充值', 'error');
-          method = m.id;
-          [...methodBox.children].forEach((c) => c.classList.toggle('on', c.dataset.id === m.id));
-        },
-      }, [
-        h('span', { class: 'pm-ico', text: m.icon }),
-        h('div', { class: 'pm-txt' }, [
-          h('div', { class: 'pm-name', text: m.name }),
-          m.sub ? h('div', { class: 'pm-sub', text: m.sub }) : null,
-        ]),
-        h('span', { class: 'pm-radio' }),
+    /* --- 渠道下多支付方式（支付宝/微信/QQ） --- */
+    const subBox = h('div', { class: 'pay-submethods' });
+    function renderSubMethods() {
+      subBox.innerHTML = '';
+      const c = channels[chIdx];
+      if (useBalance || !c || c.methods.length <= 1) return;
+      const row = h('div', { class: 'psm-row' }, [
+        h('span', { class: 'psm-label', text: '支付方式' }),
       ]);
-      item.dataset.id = m.id;
-      methodBox.appendChild(item);
-    });
+      c.methods.forEach((m) => {
+        const chip = h('button', {
+          class: 'psm-chip' + (methodId === m.id ? ' on' : ''),
+          text: `${m.icon || ''} ${m.name}`,
+          onclick: () => { methodId = m.id; renderSubMethods(); },
+        });
+        row.appendChild(chip);
+      });
+      subBox.appendChild(row);
+    }
 
     const submit = h('button', { class: 'btn btn-primary btn-block', text: `确认支付 ${cur}${plan.price}` });
 
@@ -480,19 +556,27 @@ export function renderVipPage(root, site, opts = {}) {
         ]),
         h('div', { class: 'vm-label', text: '选择支付方式' }),
         methodBox,
+        subBox,
       ]),
       h('div', { class: 'vm-foot' }, [submit])
     );
     document.body.appendChild(mask);
+    renderMethods();
+    renderSubMethods();
 
     submit.onclick = async () => {
       submit.disabled = true;
       submit.textContent = '处理中…';
+      const c = channels[chIdx];
+      const body = {
+        type: 'vip',
+        planId: plan.id,
+        useBalance,
+        payMethod: useBalance ? 'balance' : (methodId || 'alipay'),
+        channelId: useBalance ? '' : (c && c.kind === 'channel' ? c.id : ''),
+      };
       try {
-        const r = await api('/api/vip/order', {
-          method: 'POST',
-          body: { type: 'vip', planId: plan.id, payMethod: method, useBalance: method === 'balance' },
-        });
+        const r = await api('/api/vip/order', { method: 'POST', body });
 
         // 余额支付：立即完成
         if (r.paid) {
@@ -503,11 +587,20 @@ export function renderVipPage(root, site, opts = {}) {
           return;
         }
 
-        // 在线支付
+        // 在线支付：按 mode 分支处理
         const p = r.payment || {};
         if (p.mode === 'mock') {
           await mockPay(r.order.id, mask, submit);
+        } else if (p.mode === 'qrcode') {
+          // 微信 Native 扫码
+          await wxpayNative(r.order.id, p, mask, submit);
+        } else if (p.mode === 'manual') {
+          renderManual(r.order.id, p, mask, submit);
         } else if (p.mode === 'redirect' && p.payload && p.payload.url) {
+          toast('正在跳转支付页面…');
+          window.open(p.payload.url, '_blank');
+          startPolling(r.order.id, mask, submit);
+        } else if (p.mode === 'custom' && p.payload && p.payload.url) {
           toast('正在跳转支付页面…');
           window.open(p.payload.url, '_blank');
           startPolling(r.order.id, mask, submit);
@@ -526,6 +619,106 @@ export function renderVipPage(root, site, opts = {}) {
     };
   }
 
+  /** 微信 V3 Native：服务端下单 → 二维码 */
+  async function wxpayNative(orderId, payment, mask, btn) {
+    btn.textContent = '正在获取支付二维码…';
+    try {
+      const r = await api('/api/pay/wxpay/native', { method: 'POST', body: { orderId } });
+      renderQrcode(r.codeUrl || '', orderId, mask, btn, '微信扫码支付');
+    } catch (e) {
+      toast(e.message || '微信下单失败', 'error');
+      btn.disabled = false;
+      btn.textContent = '重试';
+      btn.onclick = () => wxpayNative(orderId, payment, mask, btn);
+    }
+  }
+
+  /** 渲染二维码（用轻量二维码生成，避免外链） */
+  function renderQrcode(codeUrl, orderId, mask, btn, title) {
+    const body = mask.querySelector('.vm-body');
+    if (!body) return;
+    body.innerHTML = '';
+    const box = h('div', { class: 'pay-qr' }, [
+      h('div', { class: 'pq-title', text: title }),
+      h('div', { class: 'pq-img', id: 'pq-img' }),
+      h('div', { class: 'pq-code', text: codeUrl || '（未获取到二维码链接）' }),
+      h('div', { class: 'pq-tip', text: '支付完成后页面会自动刷新' }),
+    ]);
+    body.appendChild(box);
+    // 用第三方二维码服务渲染（无依赖、可离线时降级为链接）
+    if (codeUrl) {
+      const img = h('img', {
+        src: 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(codeUrl),
+        alt: '支付二维码',
+        onerror: function () { this.replaceWith(h('div', { class: 'pq-fallback', text: '二维码加载失败，请复制下方链接' })); },
+      });
+      box.querySelector('#pq-img').appendChild(img);
+    }
+    const foot = mask.querySelector('.vm-foot');
+    if (foot) {
+      foot.innerHTML = '';
+      foot.append(
+        h('button', { class: 'btn btn-ghost btn-block', text: '我已支付', onclick: () => pollOnce(orderId, mask, btn) }),
+        h('button', { class: 'btn btn-block', text: '取消订单', onclick: () => mask.remove() })
+      );
+    }
+    startPolling(orderId, mask, btn, true);
+  }
+
+  /** 人工收款：展示收款码 / 账号 + 提交凭证 */
+  function renderManual(orderId, payment, mask, btn) {
+    const pl = payment.payload || {};
+    const cur = (state.info && state.info.currency) || '¥';
+    const body = mask.querySelector('.vm-body');
+    if (!body) return;
+    body.innerHTML = '';
+    const box = h('div', { class: 'pay-manual' }, [
+      h('div', { class: 'pm-head', text: '请扫码 / 转账支付' }),
+      pl.qrcode ? h('div', { class: 'pm-qr' }, [h('img', { src: pl.qrcode, alt: '收款码' })]) : null,
+      h('div', { class: 'pm-rows' }, [
+        h('div', { class: 'pmr' }, [h('span', { text: '应付金额' }), h('b', { class: 'amt', text: cur + pl.amount })]),
+        pl.accountName ? h('div', { class: 'pmr' }, [h('span', { text: '收款人' }), h('b', { text: pl.accountName })]) : null,
+        pl.accountNo ? h('div', { class: 'pmr' }, [h('span', { text: '收款账号' }), h('b', { class: 'mono', text: pl.accountNo })]) : null,
+        pl.instruct ? h('div', { class: 'pm-instruct', text: pl.instruct }) : null,
+      ]),
+      h('div', { class: 'pm-label', text: '填写支付凭证（转账单号 / 末四位 / 截图链接）' }),
+      (() => {
+        const inp = h('input', { class: 'inp', placeholder: '例如：支付宝 202610020001' });
+        inp.id = 'manual-proof';
+        return inp;
+      })(),
+    ]);
+    body.appendChild(box);
+
+    const foot = mask.querySelector('.vm-foot');
+    if (foot) {
+      foot.innerHTML = '';
+      const btnSubmit = h('button', {
+        class: 'btn btn-primary btn-block',
+        text: '提交凭证，等待确认',
+        onclick: async () => {
+          const proof = (mask.querySelector('#manual-proof') || {}).value || '';
+          if (!proof.trim()) return toast('请填写支付凭证', 'error');
+          btnSubmit.disabled = true;
+          btnSubmit.textContent = '提交中…';
+          try {
+            await api('/api/pay/manual/claim', { method: 'POST', body: { orderId, proof: proof.trim() } });
+            toast('凭证已提交，管理员确认后自动到账', 'success');
+            mask.remove();
+            state.tab = 'orders';
+            refreshTabs();
+            renderTab(panel);
+          } catch (e) {
+            toast(e.message || '提交失败', 'error');
+            btnSubmit.disabled = false;
+            btnSubmit.textContent = '提交凭证，等待确认';
+          }
+        },
+      });
+      foot.append(btnSubmit, h('button', { class: 'btn btn-block', text: '取消', onclick: () => mask.remove() }));
+    }
+  }
+
   /** 演示模式：模拟支付 */
   async function mockPay(orderId, mask, btn) {
     try {
@@ -542,8 +735,8 @@ export function renderVipPage(root, site, opts = {}) {
   }
 
   /** 真实支付：轮询订单状态 */
-  function startPolling(orderId, mask, btn) {
-    btn.textContent = '等待支付结果…';
+  function startPolling(orderId, mask, btn, silent) {
+    if (btn) btn.textContent = '等待支付结果…';
     let n = 0;
     const timer = setInterval(async () => {
       n++;
@@ -555,7 +748,7 @@ export function renderVipPage(root, site, opts = {}) {
           mask.remove();
           await auth.refresh();
           go('/vip');
-        } else if (['expired', 'cancelled'].includes(r.order.status)) {
+        } else if (['expired', 'cancelled', 'rejected'].includes(r.order.status)) {
           clearInterval(timer);
           toast('订单已失效，请重新下单', 'error');
           mask.remove();
@@ -563,10 +756,38 @@ export function renderVipPage(root, site, opts = {}) {
       } catch {}
       if (n > 60) {
         clearInterval(timer);
-        toast('未检测到支付结果，可稍后在「我的订单」查看', 'info');
-        mask.remove();
+        if (!silent) {
+          toast('未检测到支付结果，可稍后在「我的订单」查看', 'info');
+          mask.remove();
+        }
       }
     }, 3000);
+    return timer;
+  }
+
+  /** 手动查一次订单状态（「我已支付」按钮） */
+  async function pollOnce(orderId, mask, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '查询中…'; }
+    try {
+      const r = await api('/api/user/order/' + orderId);
+      const st = r.order.status;
+      if (st === 'paid') {
+        toast('支付成功，会员已生效 🎉', 'success');
+        mask.remove();
+        await auth.refresh();
+        go('/vip');
+        return;
+      }
+      const map = {
+        pending: '尚未收到支付结果，请稍候',
+        claiming: '凭证已提交，等待管理员确认',
+        rejected: '订单已被驳回：' + (r.order.rejectReason || '凭证无效'),
+      };
+      toast(map[st] || ('当前状态：' + st), st === 'rejected' ? 'error' : 'info');
+    } catch (e) {
+      toast(e.message || '查询失败', 'error');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '我已支付'; }
   }
 
   /* ==================== 余额充值 ==================== */
@@ -622,20 +843,27 @@ export function renderVipPage(root, site, opts = {}) {
     };
 
     const methodBox = h('div', { class: 'pay-methods' });
-    let method = (info.payMethods[0] && info.payMethods[0].id) || 'alipay';
-    (info.payMethods || []).forEach((m, i) => {
+    const rcChannels = payChannels(info);
+    let rcChIdx = 0;
+    let method = (rcChannels[0] && rcChannels[0].methods[0] && rcChannels[0].methods[0].id) || 'alipay';
+    rcChannels.forEach((c, i) => {
+      const names = (c.methods || []).map((m) => m.name).join(' / ');
       const item = h('div', {
         class: 'pay-method' + (i === 0 ? ' on' : ''),
         onclick: () => {
-          method = m.id;
-          [...methodBox.children].forEach((c) => c.classList.toggle('on', c.dataset.id === m.id));
+          rcChIdx = i;
+          method = (c.methods[0] && c.methods[0].id) || 'alipay';
+          [...methodBox.children].forEach((el) => el.classList.toggle('on', Number(el.dataset.i) === i));
         },
       }, [
-        h('span', { class: 'pm-ico', text: m.icon }),
-        h('div', { class: 'pm-txt' }, [h('div', { class: 'pm-name', text: m.name })]),
+        h('span', { class: 'pm-ico', text: c.icon }),
+        h('div', { class: 'pm-txt' }, [
+          h('div', { class: 'pm-name', text: c.name }),
+          h('div', { class: 'pm-sub', text: c.manual ? '线下转账' : (names || '在线支付') }),
+        ]),
         h('span', { class: 'pm-radio' }),
       ]);
-      item.dataset.id = m.id;
+      item.dataset.i = String(i);
       methodBox.appendChild(item);
     });
 
@@ -645,15 +873,25 @@ export function renderVipPage(root, site, opts = {}) {
       if (!(amt >= (info.minRecharge || 1))) return toast(`最低充值 ${cur}${info.minRecharge || 1}`, 'error');
       submit.disabled = true;
       submit.textContent = '下单中…';
+      const rcCh = rcChannels[rcChIdx];
       try {
-        const r = await api('/api/vip/order', { method: 'POST', body: { type: 'recharge', amount: amt, payMethod: method } });
+        const r = await api('/api/vip/order', {
+          method: 'POST',
+          body: {
+            type: 'recharge', amount: amt, payMethod: method,
+            channelId: rcCh && rcCh.kind === 'channel' ? rcCh.id : '',
+          },
+        });
         const p = r.payment || {};
         if (p.mode === 'mock') {
           await api('/api/pay/mock', { method: 'POST', body: { orderId: r.order.id } });
           toast(`充值成功，${cur}${amt} 已到账`, 'success');
           await auth.refresh();
           go('/vip');
-        } else if (p.mode === 'redirect' && p.payload && p.payload.url) {
+        } else if (p.mode === 'manual') {
+          toast('订单已创建，请在「我的订单」中提交转账凭证', 'info');
+          state.tab = 'orders'; refreshTabs(); renderTab(panel);
+        } else if ((p.mode === 'redirect' || p.mode === 'custom') && p.payload && p.payload.url) {
           window.open(p.payload.url, '_blank');
           toast('请在打开的页面完成支付', 'info');
           state.tab = 'orders'; refreshTabs(); renderTab(panel);

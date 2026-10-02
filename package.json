@@ -7,7 +7,13 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed-columns.js",
+    "sync:cctv": "node scripts/sync-columns.js",
+    "test": "node scripts/e2e-test.js && node scripts/test-family.js && node scripts/test-pay.js && node scripts/test-channels.js",
+    "test:e2e": "node scripts/e2e-test.js",
+    "test:family": "node scripts/test-family.js",
+    "test:pay": "node scripts/test-pay.js",
+    "test:channels": "node scripts/test-channels.js"
   },
   "keywords": [
     "iptv",

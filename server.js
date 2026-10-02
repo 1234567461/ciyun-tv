@@ -79,6 +79,7 @@ app.get('/api/site', (req, res) => {
       rechargePresets: s.monetize.rechargePresets || [10, 30, 50, 100, 200, 500],
       orderTimeout: s.monetize.orderTimeout || 30,
       payMethods: pay.payMethods(s.monetize),
+      channels: pay.availableChannels(s.monetize),
       plans: s.monetize.plans || [],
     },
     playback: s.playback,
@@ -1239,6 +1240,14 @@ function money(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+/** 保存支付渠道列表（写回 monetize.channels） */
+function savePayChannels(list) {
+  const norm = (list || []).map((c, i) => pay.normalizeChannel(c, i));
+  norm.sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
+  store.setSettings({ monetize: { channels: norm } });
+  return norm;
+}
+
 /** 会员视图（含剩余天数） */
 function vipView(u) {
   const cfg = store.settings.monetize || {};
@@ -1320,6 +1329,7 @@ app.get('/api/vip/info', (req, res) => {
       perDay: p.days ? money(p.price / p.days) : 0,
     })),
     payMethods: pay.payMethods(cfg),
+    channels: pay.availableChannels(cfg),
     vip: u ? vipView(u) : null,
     loggedIn: !!u,
   });
@@ -1440,6 +1450,7 @@ app.post('/api/vip/order', (req, res) => {
   const b = req.body || {};
   const type = b.type === 'recharge' ? 'recharge' : 'vip';
   const payMethod = String(b.payMethod || 'alipay');
+  const channelId = String(b.channelId || '');
   const useBalance = !!b.useBalance;
 
   // ---- 管理员特权：无需下单，直接授予（会员/额度无限） ----
@@ -1495,11 +1506,17 @@ app.post('/api/vip/order', (req, res) => {
     planName,
     amount,
     payMethod,
+    channelId,
     status: 'pending',
     title: planName,
   });
 
   const payment = pay.buildPayment(cfg, order, siteBaseUrl(req));
+  // 渠道不可用时：作废订单并明确报错，避免前端拿到"看似成功"的订单
+  if (!payment.ok) {
+    store.updateOrder(order.id, { status: 'cancelled', cancelAt: Date.now(), cancelReason: payment.error || 'channel unavailable' });
+    return res.status(400).json({ ok: false, error: payment.error || '支付渠道不可用', order: store.findOrder(order.id) });
+  }
   res.json({ ok: true, paid: false, order, payment, vip: vipView(u) });
 });
 
@@ -1523,6 +1540,10 @@ app.post('/api/user/order', (req, res) => {
     title: plan.name,
   });
   const payment = pay.buildPayment(cfg, order, siteBaseUrl(req));
+  if (!payment.ok) {
+    store.updateOrder(order.id, { status: 'cancelled', cancelAt: Date.now(), cancelReason: payment.error || 'channel unavailable' });
+    return res.status(400).json({ ok: false, error: payment.error || '支付渠道不可用' });
+  }
   res.json({ ok: true, order, payment });
 });
 
@@ -1606,6 +1627,230 @@ app.post('/api/pay/mock', (req, res) => {
   if (o.status !== 'pending') return res.status(400).json({ error: '订单已失效，请重新下单' });
   const done = finishOrder(o, { via: 'mock' });
   res.json({ ok: true, order: done, vip: vipView(store.findUser(u.account)) });
+});
+
+/* ============================================================
+ * 支付渠道：微信 V3 下单 / 人工收款凭证 / 渠道可用性
+ * ============================================================ */
+
+/**
+ * 微信支付 V3 · Native 扫码下单
+ * 前端拿到 buildPayment 的 payload（含 body / auth 头）后，POST 到此接口由服务端发起真实请求
+ */
+app.post('/api/pay/wxpay/native', async (req, res) => {
+  const cfg = store.settings.monetize || {};
+  if (!cfg.enabled) return res.status(403).json({ error: '付费模块未开启' });
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+
+  const o = store.findOrder((req.body || {}).orderId);
+  if (!o) return res.status(404).json({ error: '订单不存在' });
+  if (o.account !== u.account) return res.status(403).json({ error: '无权操作该订单' });
+  if (o.status !== 'pending') return res.status(400).json({ error: '订单已失效，请重新下单' });
+
+  // 定位微信渠道
+  const ch = pay.getChannels(cfg).find((c) => c.type === 'wxpay' && c.enabled)
+    || pay.getChannels(cfg).find((c) => c.id === o.channelId);
+  if (!ch || ch.type !== 'wxpay') return res.status(400).json({ error: '未配置可用的微信支付渠道' });
+  const chk = pay.checkChannel(ch);
+  if (!chk.ok) return res.status(400).json({ error: chk.error });
+
+  const body = {
+    appid: ch.config.appId,
+    mchid: ch.config.mchId,
+    description: (o.planName || '会员服务').slice(0, 120),
+    out_trade_no: o.id,
+    notify_url: `${siteBaseUrl(req)}/api/pay/callback`,
+    amount: { total: Math.round(Number(o.amount) * 100), currency: 'CNY' },
+  };
+  const bodyStr = JSON.stringify(body);
+  let auth = '';
+  try {
+    auth = pay.wxV3Auth('POST', '/v3/pay/transactions/native',
+      ch.config.mchId, ch.config.serialNo, ch.config.privateKey, bodyStr);
+  } catch (e) {
+    return res.status(400).json({ error: '商户私钥无效：' + e.message });
+  }
+
+  const gw = (ch.config.gateway || 'https://api.mch.weixin.qq.com').replace(/\/+$/, '');
+  try {
+    const r = await fetch(`${gw}/v3/pay/transactions/native`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'User-Agent': 'ciyun-tv/1.0',
+        Authorization: auth,
+      },
+      body: bodyStr,
+    });
+    const txt = await r.text();
+    let j = null;
+    try { j = JSON.parse(txt); } catch { j = null; }
+    if (!r.ok) {
+      return res.status(502).json({
+        error: (j && (j.message || j.code)) || '微信下单失败',
+        detail: txt.slice(0, 300),
+      });
+    }
+    // 保存 prepay_id，便于后续查询
+    store.updateOrder(o.id, { prepayId: j.prepay_id || '', qrcodeUrl: j.code_url || '' });
+    res.json({ ok: true, codeUrl: j.code_url || '', prepayId: j.prepay_id || '' });
+  } catch (e) {
+    res.status(502).json({ error: '无法连接微信支付网关：' + e.message });
+  }
+});
+
+/** 人工收款：用户提交支付凭证（转账号 / 截图链接 / 备注），等待管理员确认 */
+app.post('/api/pay/manual/claim', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  if (!cfg.enabled) return res.status(403).json({ error: '付费模块未开启' });
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const b = req.body || {};
+  const o = store.findOrder(b.orderId);
+  if (!o) return res.status(404).json({ error: '订单不存在' });
+  if (o.account !== u.account) return res.status(403).json({ error: '无权操作该订单' });
+  if (o.status !== 'pending') return res.status(400).json({ error: '订单当前状态无需提交凭证' });
+  const proof = String(b.proof || '').trim().slice(0, 500);
+  if (!proof) return res.status(400).json({ error: '请填写支付凭证（转账单号 / 末四位 / 截图链接）' });
+  store.updateOrder(o.id, {
+    claim: { proof, note: String(b.note || '').slice(0, 300), at: Date.now(), by: u.account },
+    status: 'claiming',
+  });
+  res.json({ ok: true, order: store.findOrder(o.id), message: '凭证已提交，管理员确认后自动到账' });
+});
+
+/** 可用支付渠道（前台展示用，不含敏感配置） */
+app.get('/api/pay/channels', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  res.json({
+    enabled: !!cfg.enabled,
+    currency: cfg.currency || '¥',
+    channels: cfg.enabled ? pay.availableChannels(cfg) : [],
+    methods: cfg.enabled ? pay.payMethods(cfg) : [],
+    allowBalance: cfg.allowBalance !== false,
+    rechargePresets: cfg.rechargePresets || [10, 30, 50, 100, 200, 500],
+    minRecharge: cfg.minRecharge || 1,
+  });
+});
+
+/** 渠道类型清单（后台表单渲染用） */
+app.get('/api/admin/pay/channel-types', requireAdmin, (req, res) => {
+  res.json({
+    types: Object.entries(pay.CHANNEL_TYPES).map(([id, t]) => ({
+      id, name: t.name, icon: t.icon, desc: t.desc,
+      fields: t.fields || [], methods: t.methods || [],
+    })),
+    methodMeta: pay.METHOD_META,
+  });
+});
+
+/** 后台：渠道列表 */
+app.get('/api/admin/pay/channels', requireAdmin, (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const list = pay.getChannels(cfg).map((c) => ({
+    ...c,
+    ready: pay.channelReady(c),
+    check: pay.checkChannel(c),
+  }));
+  res.json({ channels: list, list: list });
+});
+
+/** 后台：新增渠道 */
+app.post('/api/admin/pay/channels', requireAdmin, (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const list = pay.getChannels(cfg);
+  const ch = pay.normalizeChannel(req.body || {}, list.length);
+  if (list.find((x) => x.id === ch.id)) return res.status(409).json({ error: '渠道 ID 已存在' });
+  list.push(ch);
+  savePayChannels(list);
+  res.json({ ok: true, channel: ch, check: pay.checkChannel(ch) });
+});
+
+/** 后台：修改渠道（配置 / 启停 / 排序 / 名称 / 支付方式） */
+app.put('/api/admin/pay/channels/:id', requireAdmin, (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const list = pay.getChannels(cfg);
+  const idx = list.findIndex((c) => c.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: '渠道不存在' });
+  const b = req.body || {};
+  const merged = {
+    ...list[idx],
+    ...b,
+    id: list[idx].id,
+    // 配置项做合并（允许只改其中一项，不覆盖其余密钥）
+    config: b.config ? { ...list[idx].config, ...b.config } : list[idx].config,
+    methods: b.methods || list[idx].methods,
+  };
+  list[idx] = pay.normalizeChannel(merged, idx);
+  savePayChannels(list);
+  res.json({ ok: true, channel: list[idx], check: pay.checkChannel(list[idx]) });
+});
+
+/** 后台：删除渠道 */
+app.delete('/api/admin/pay/channels/:id', requireAdmin, (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const list = pay.getChannels(cfg).filter((c) => c.id !== req.params.id);
+  savePayChannels(list);
+  res.json({ ok: true, total: list.length });
+});
+
+/** 后台：渠道排序（一次性提交顺序数组）
+ *  注意：路径不能放在 /channels/:id 之下，否则 "order" 会被当作 id 吃掉
+ */
+app.put('/api/admin/pay/channel-order', requireAdmin, (req, res) => {
+  const ids = (req.body || {}).ids;
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids 必须为数组' });
+  const cfg = store.settings.monetize || {};
+  const list = pay.getChannels(cfg);
+  ids.forEach((id, i) => {
+    const c = list.find((x) => x.id === id);
+    if (c) c.sort = (i + 1) * 10;
+  });
+  savePayChannels(list);
+  res.json({ ok: true });
+});
+
+/** 后台：连通性自检（不发真实请求，只校验配置完整性 + 密钥可解析） */
+app.post('/api/admin/pay/channels/:id/test', requireAdmin, (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const ch = pay.getChannels(cfg).find((c) => c.id === req.params.id);
+  if (!ch) return res.status(404).json({ error: '渠道不存在' });
+  const check = pay.checkChannel(ch);
+  res.json({
+    ok: check.ok,
+    ready: pay.channelReady(ch),
+    error: check.error || '',
+    missing: check.missing || [],
+    type: ch.type,
+    name: ch.name,
+    message: check.ok ? '配置完整，可正常使用' : (check.error || '配置不完整'),
+  });
+});
+
+/** 后台：人工收款订单确认 / 驳回 */
+app.post('/api/admin/pay/orders/:id/confirm', requireAdmin, (req, res) => {
+  const o = store.findOrder(req.params.id);
+  if (!o) return res.status(404).json({ error: '订单不存在' });
+  if (o.status === 'paid') return res.json({ ok: true, order: o, message: '订单已支付' });
+  if (!['pending', 'claiming'].includes(o.status)) {
+    return res.status(400).json({ error: '该订单当前状态不可确认' });
+  }
+  const done = finishOrder(o, { via: 'manual:' + ((req.admin && (req.admin.user || req.admin.username)) || 'admin') });
+  res.json({ ok: true, order: done });
+});
+
+app.post('/api/admin/pay/orders/:id/reject', requireAdmin, (req, res) => {
+  const o = store.findOrder(req.params.id);
+  if (!o) return res.status(404).json({ error: '订单不存在' });
+  if (o.status === 'paid') return res.status(400).json({ error: '已支付订单不可驳回，请走退款' });
+  store.updateOrder(o.id, {
+    status: 'rejected',
+    rejectReason: String((req.body || {}).reason || '凭证无效').slice(0, 200),
+    rejectAt: Date.now(),
+  });
+  res.json({ ok: true, order: store.findOrder(o.id) });
 });
 
 /**

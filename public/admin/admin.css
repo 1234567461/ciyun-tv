@@ -181,3 +181,67 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
   .side-item { justify-content: center; padding: 11px 0; }
   .content { margin-left: 64px; padding: 20px 16px 50px; }
 }
+
+/* ==================== 支付渠道管理 ==================== */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.card-head h3 { margin: 0; }
+.hint { font-size: 12.5px; color: var(--text-mute); line-height: 1.8; margin-bottom: 16px; }
+.nowrap { white-space: nowrap; }
+.right { text-align: right; }
+.small { font-size: 12.5px; color: var(--text-sub, var(--text-mute)); }
+.table td .btn + .btn { margin-left: 6px; }
+
+.ch-name { display: flex; align-items: center; gap: 10px; }
+.ch-name .ch-ico { font-size: 20px; flex: 0 0 auto; }
+.ch-name .t { font-size: 13.5px; font-weight: 600; }
+.ch-name .d { font-size: 11.5px; color: var(--text-mute); margin-top: 2px; }
+
+.pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+.pill.ok { background: rgba(34,197,94,.15); color: var(--ok); }
+.pill.off { background: rgba(148,163,184,.16); color: var(--text-mute); }
+.pill.warn { background: rgba(234,179,8,.16); color: #eab308; }
+
+/* 渠道配置弹窗 */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 999;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  animation: mkFade .18s ease;
+}
+@keyframes mkFade { from { opacity: 0 } to { opacity: 1 } }
+.modal-dlg {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+  width: min(560px, 100%); max-height: 88vh; display: flex; flex-direction: column;
+  box-shadow: 0 24px 70px rgba(0,0,0,.5);
+}
+.md-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--border); }
+.md-head h3 { font-size: 15.5px; font-weight: 600; margin: 0; }
+.md-close { background: none; border: none; color: var(--text-mute); font-size: 17px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+.md-close:hover { background: rgba(255,255,255,.07); color: var(--text); }
+.md-body { padding: 20px 22px; overflow-y: auto; flex: 1; }
+.md-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.md-btns { display: flex; gap: 10px; }
+.md-chk { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-sub, var(--text)); cursor: pointer; }
+.md-chk input { accent-color: var(--primary); width: 15px; height: 15px; }
+.md-sec { font-size: 12px; font-weight: 600; color: var(--text-mute); text-transform: uppercase;
+  letter-spacing: .6px; margin: 20px 0 12px; padding-top: 16px; border-top: 1px dashed var(--border); }
+.md-note { font-size: 12.5px; color: var(--text-mute); padding: 14px 16px; border-radius: 10px;
+  background: rgba(255,255,255,.03); border: 1px dashed var(--border); margin-top: 16px; line-height: 1.7; }
+.field-row { display: flex; gap: 14px; }
+.field-row .field { flex: 1; min-width: 0; }
+.field label { display: block; font-size: 12.5px; color: var(--text-mute); margin-bottom: 7px; }
+.field .req { color: var(--err); }
+.field .d { font-size: 11.5px; color: var(--text-mute); margin-top: 6px; line-height: 1.6; }
+.field .ro { font-size: 13.5px; padding: 9px 0; color: var(--text-sub, var(--text)); }
+.field input, .field select, .field textarea {
+  width: 100%; padding: 10px 12px; border-radius: 8px; font-size: 13.5px; box-sizing: border-box;
+  background: var(--bg-soft, rgba(255,255,255,.05)); border: 1px solid var(--border);
+  color: var(--text); outline: none; font-family: inherit; transition: border-color .18s;
+}
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--primary); }
+.field textarea { resize: vertical; line-height: 1.6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
+@media (max-width: 560px) {
+  .field-row { flex-direction: column; gap: 0; }
+  .md-foot { flex-direction: column; align-items: stretch; }
+  .md-btns { justify-content: flex-end; }
+}

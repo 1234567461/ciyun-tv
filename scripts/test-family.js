@@ -320,9 +320,9 @@ async function mkAdmin() {
   const ownerSelf = await A.del('/api/family/member/' + A.account);
   ok('户主不能直接退出 400', ownerSelf.status === 400, ownerSelf.data);
 
-  /* ---------- 还原 ---------- */
+  /* ---------- 还原（必须回到默认值，保证测试可重复运行） ---------- */
   await webAdm.put('/api/admin/family', {
-    autoApprove: false, maxStreams: 2, deviceLimit: 3, streamPolicy: 'replace',
+    autoApprove: true, maxStreams: 2, deviceLimit: 3, streamPolicy: 'replace',
     shareQuota: true, inviteTtlDays: 3, inviteRole: 'member', familyQuotaPool: 100,
     parentalEnabled: true, childMaxRating: 'PG13', childBlockVip: true, childBlockComment: true,
   });

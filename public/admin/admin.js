@@ -461,6 +461,7 @@ async function viewMonetize(c) {
     '<div class="vip-admin-tabs">' +
       adminTab('overview', '\ud83d\udcca 收入概览') +
       adminTab('config', '\u2699\ufe0f 付费设置') +
+      adminTab('channels', '\ud83d\udcb3 支付渠道') +
       adminTab('plans', '\ud83d\udc8e 会员套餐') +
       adminTab('quota', '\ud83c\udf9f\ufe0f 额度设置') +
       adminTab('orders', '\ud83e\uddfe 订单管理') +
@@ -473,6 +474,7 @@ async function viewMonetize(c) {
     const body = $('#mt-body');
     if (mtState.tab === 'overview') renderMtOverview(body, rev);
     else if (mtState.tab === 'config') renderMtConfig(body, m);
+    else if (mtState.tab === 'channels') renderMtChannels(body);
     else if (mtState.tab === 'plans') renderMtPlans(body, m);
     else if (mtState.tab === 'quota') renderMtQuota(body, m);
     else if (mtState.tab === 'orders') renderMtOrders(body);
@@ -584,6 +586,210 @@ function renderMtConfig(box, m) {
       viewMonetize($('#content'));
     } catch (e) { toast(e.message, 'err'); }
   };
+}
+
+/* ---------------------------- 支付渠道 ---------------------------- */
+const CH_TP = { mock: '\ud83e\uddea', epay: '\ud83c\udf08', alipay: '\ud83c\udd70\ufe0f', wxpay: '\ud83d\udc9a', manual: '\ud83c\udfe6', custom: '\ud83d\udd27' };
+
+async function renderMtChannels(box) {
+  box.innerHTML = '<div class="card">加载中…</div>';
+  let data, types, methodMeta;
+  try {
+    [data, types] = await Promise.all([
+      API('/api/admin/pay/channels'),
+      API('/api/admin/pay/channel-types'),
+    ]);
+    methodMeta = types.methodMeta || {};
+    types = types.types || [];
+  } catch (e) {
+    box.innerHTML = '<div class="card">加载失败：' + esc(e.message) + '</div>';
+    return;
+  }
+  const list = data.channels || [];
+
+  const paint = (channels) => {
+    const rows = channels.map((c) => {
+      const meta = types.find((t) => t.id === c.type) || {};
+      const ready = c.ready;
+      const cfg = c.config || {};
+      const filled = (meta.fields || []).filter((f) => cfg[f.k]).length;
+      const total = (meta.fields || []).length;
+      return '<tr data-id="' + esc(c.id) + '">' +
+        '<td><div class="ch-name"><span class="ch-ico">' + (c.icon || '\ud83d\udcb3') + '</span>' +
+          '<div><div class="t">' + esc(c.name) + '</div><div class="d">' + esc(meta.name || c.type) + '</div></div></div></td>' +
+        '<td><span class="pill ' + (c.enabled ? 'ok' : 'off') + '">' + (c.enabled ? '已启用' : '已停用') + '</span></td>' +
+        '<td>' + (ready
+          ? '<span class="pill ok">\u2713 可用</span>'
+          : '<span class="pill warn">\u26a0 ' + (c.enabled ? '\u914d\u7f6e\u4e0d\u5168' : '\u672a\u542f\u7528') + '</span>') + '</td>' +
+        '<td class="small">' + (total ? filled + ' / ' + total + ' \u9879' : '\u65e0\u9700\u914d\u7f6e') + '</td>' +
+        '<td class="small">' + ((c.methods || []).map((x) => esc(x.name)).join('\u3001') || '\u2014') + '</td>' +
+        '<td class="small">' + (c.sort || 0) + '</td>' +
+        '<td class="right nowrap">' +
+          '<button class="btn btn-sm" data-act="edit">\u914d\u7f6e</button>' +
+          '<button class="btn btn-sm" data-act="toggle">' + (c.enabled ? '\u505c\u7528' : '\u542f\u7528') + '</button>' +
+          '<button class="btn btn-sm btn-ghost" data-act="test">\u68c0\u6d4b</button>' +
+          (c.type === 'mock' ? '' : '<button class="btn btn-sm btn-ghost" data-act="del">\u5220\u9664</button>') +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    box.innerHTML =
+      '<div class="card">' +
+        '<div class="card-head"><h3>\ud83d\udcb3 \u652f\u4ed8\u6e20\u9053</h3>' +
+          '<button class="btn btn-primary btn-sm" id="ch-add">+ \u65b0\u589e\u6e20\u9053</button></div>' +
+        '<p class="hint">\u652f\u6301\u6a21\u62df\u652f\u4ed8 / \u6613\u652f\u4ed8 / \u652f\u4ed8\u5b9d\u5b98\u65b9 / \u5fae\u4fe1\u652f\u4ed8 V3 / \u4eba\u5de5\u6536\u6b3e / \u81ea\u5b9a\u4e49\u7f51\u5173\u3002\u53ef\u81ea\u7531\u589e\u5220\u3001\u542f\u505c\u3001\u6392\u5e8f\uff1b' +
+          '\u5173\u95ed\u4ed8\u8d39\u6a21\u5757\u65f6\u6e20\u9053\u4e0d\u751f\u6548\u3002</p>' +
+        '<div class="table-wrap"><table class="table"><thead><tr>' +
+          '<th>\u6e20\u9053</th><th>\u72b6\u6001</th><th>\u53ef\u7528\u6027</th><th>\u914d\u7f6e</th><th>\u652f\u4ed8\u65b9\u5f0f</th><th>\u6392\u5e8f</th><th class="right">\u64cd\u4f5c</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '</div>';
+
+    // 事件绑定
+    $('#ch-add').onclick = () => editChannel(null, types, methodMeta, list, paint);
+
+    $$('tbody tr').forEach((tr) => {
+      const id = tr.dataset.id;
+      const ch = list.find((x) => x.id === id);
+      tr.querySelectorAll('[data-act]').forEach((btn) => {
+        btn.onclick = async () => {
+          const act = btn.dataset.act;
+          if (act === 'edit') return editChannel(ch, types, methodMeta, list, paint);
+          if (act === 'toggle') {
+            try {
+              await API('/api/admin/pay/channels/' + id, { method: 'PUT', body: { enabled: !ch.enabled } });
+              toast(ch.enabled ? '\u5df2\u505c\u7528' : '\u5df2\u542f\u7528', 'ok');
+              reload();
+            } catch (e) { toast(e.message, 'err'); }
+            return;
+          }
+          if (act === 'test') {
+            btn.disabled = true;
+            btn.textContent = '\u68c0\u6d4b\u4e2d\u2026';
+            try {
+              const r = await API('/api/admin/pay/channels/' + id + '/test', { method: 'POST' });
+              toast(r.message || (r.ok ? '\u914d\u7f6e\u6b63\u5e38' : '\u914d\u7f6e\u6709\u8bef'), r.ok ? 'ok' : 'err');
+            } catch (e) { toast(e.message, 'err'); }
+            btn.disabled = false;
+            btn.textContent = '\u68c0\u6d4b';
+            return;
+          }
+          if (act === 'del') {
+            if (!confirm('\u786e\u5b9a\u5220\u9664\u6e20\u9053\u300c' + ch.name + '\u300d\uff1f')) return;
+            try {
+              await API('/api/admin/pay/channels/' + id, { method: 'DELETE' });
+              toast('\u5df2\u5220\u9664', 'ok');
+              reload();
+            } catch (e) { toast(e.message, 'err'); }
+          }
+        };
+      });
+    });
+  };
+
+  const reload = async () => {
+    try {
+      const d = await API('/api/admin/pay/channels');
+      list.length = 0;
+      (d.channels || []).forEach((c) => list.push(c));
+      paint(list);
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  paint(list);
+}
+
+/** 渠道配置弹窗（按字段元数据动态渲染） */
+function editChannel(ch, types, methodMeta, list, onDone) {
+  const isNew = !ch;
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  const dlg = document.createElement('div');
+  dlg.className = 'modal-dlg';
+  mask.appendChild(dlg);
+
+  let type = ch ? ch.type : (types[0] && types[0].id) || 'mock';
+  const conf = ch ? JSON.parse(JSON.stringify(ch.config || {})) : {};
+
+  const paint = () => {
+    const meta = types.find((t) => t.id === type) || { fields: [], methods: [] };
+    const fields = meta.fields || [];
+    const cfgOf = (k) => conf[k] || '';
+
+    dlg.innerHTML =
+      '<div class="md-head"><h3>' + (isNew ? '\u65b0\u589e\u652f\u4ed8\u6e20\u9053' : '\u914d\u7f6e\uff1a' + esc(ch.name)) + '</h3>' +
+        '<button class="md-close">\u2715</button></div>' +
+      '<div class="md-body">' +
+        (isNew
+          ? '<div class="field"><label>\u6e20\u9053\u7c7b\u578b</label><select id="m-type">' +
+              types.map((t) => '<option value="' + t.id + '"' + (t.id === type ? ' selected' : '') + '>' + t.icon + ' ' + esc(t.name) + '</option>').join('') +
+            '</select><div class="d">' + esc((types.find((t) => t.id === type) || {}).desc || '') + '</div></div>'
+          : '<div class="field"><label>\u6e20\u9053\u7c7b\u578b</label><div class="ro">' + (CH_TP[type] || '') + ' ' + esc((types.find((t) => t.id === type) || {}).name || type) + '</div></div>') +
+        '<div class="field"><label>\u6e20\u9053\u540d\u79f0</label><input id="m-name" value="' + esc(ch ? ch.name : (types.find((t) => t.id === type) || {}).name || '') + '" maxlength="40"></div>' +
+        '<div class="field-row">' +
+          '<div class="field"><label>\u56fe\u6807</label><input id="m-icon" value="' + esc(ch ? ch.icon : (types.find((t) => t.id === type) || {}).icon || '\ud83d\udcb3') + '" maxlength="4"></div>' +
+          '<div class="field"><label>\u6392\u5e8f\uff08\u8d8a\u5c0f\u8d8a\u9760\u524d\uff09</label><input id="m-sort" type="number" value="' + (ch ? ch.sort : (list.length + 1) * 10) + '"></div>' +
+        '</div>' +
+        (fields.length
+          ? '<div class="md-sec">\u6e20\u9053\u914d\u7f6e</div>' + fields.map((f) => {
+              const req = f.required ? ' <span class="req">*</span>' : '';
+              const ph = f.ph ? ' placeholder="' + esc(f.ph) + '"' : '';
+              if (f.type === 'select') {
+                return '<div class="field"><label>' + esc(f.label) + req + '</label><select data-k="' + f.k + '">' +
+                  (f.options || []).map((o) => '<option' + (cfgOf(f.k) === o ? ' selected' : '') + '>' + esc(o) + '</option>').join('') +
+                  '</select></div>';
+              }
+              if (f.type === 'textarea') {
+                return '<div class="field"><label>' + esc(f.label) + req + '</label>' +
+                  '<textarea data-k="' + f.k + '" rows="4"' + ph + '>' + esc(cfgOf(f.k)) + '</textarea></div>';
+              }
+              return '<div class="field"><label>' + esc(f.label) + req + '</label>' +
+                '<input data-k="' + f.k + '" type="' + (f.type === 'password' ? 'password' : 'text') + '" value="' + esc(cfgOf(f.k)) + '"' + ph + '></div>';
+            }).join('')
+          : '<div class="md-note">\u8be5\u6e20\u9053\u65e0\u9700\u914d\u7f6e\uff0c\u5f00\u7bb1\u5373\u7528\u3002</div>') +
+      '</div>' +
+      '<div class="md-foot">' +
+        '<label class="md-chk"><input type="checkbox" id="m-en"' + (ch ? (ch.enabled ? ' checked' : '') : ' checked') + '> \u542f\u7528\u6b64\u6e20\u9053</label>' +
+        '<div class="md-btns"><button class="btn btn-ghost" id="m-cancel">\u53d6\u6d88</button>' +
+        '<button class="btn btn-primary" id="m-save">\u4fdd\u5b58</button></div>' +
+      '</div>';
+
+    dlg.querySelector('.md-close').onclick = () => mask.remove();
+    dlg.querySelector('#m-cancel').onclick = () => mask.remove();
+    const tSel = dlg.querySelector('#m-type');
+    if (tSel) tSel.onchange = () => { type = tSel.value; paint(); };
+    dlg.querySelectorAll('[data-k]').forEach((el) => {
+      el.oninput = el.onchange = () => { conf[el.dataset.k] = el.value; };
+    });
+
+    dlg.querySelector('#m-save').onclick = async () => {
+      const body = {
+        type,
+        name: dlg.querySelector('#m-name').value.trim(),
+        icon: dlg.querySelector('#m-icon').value.trim() || '\ud83d\udcb3',
+        sort: +dlg.querySelector('#m-sort').value || 0,
+        enabled: dlg.querySelector('#m-en').checked,
+        config: conf,
+      };
+      if (!body.name) return toast('\u8bf7\u586b\u5199\u6e20\u9053\u540d\u79f0', 'err');
+      const btn = dlg.querySelector('#m-save');
+      btn.disabled = true; btn.textContent = '\u4fdd\u5b58\u4e2d\u2026';
+      try {
+        const r = isNew
+          ? await API('/api/admin/pay/channels', { method: 'POST', body })
+          : await API('/api/admin/pay/channels/' + ch.id, { method: 'PUT', body });
+        const ck = r.check || {};
+        toast(ck.ok ? '\u5df2\u4fdd\u5b58\uff0c\u914d\u7f6e\u5b8c\u6574' : '\u5df2\u4fdd\u5b58\uff0c' + (ck.error || '\u914d\u7f6e\u4e0d\u5168'), ck.ok ? 'ok' : 'err');
+        mask.remove();
+        onDone();
+      } catch (e) {
+        toast(e.message, 'err');
+        btn.disabled = false; btn.textContent = '\u4fdd\u5b58';
+      }
+    };
+  };
+
+  paint();
+  document.body.appendChild(mask);
 }
 
 /* ---------------------------- 套餐管理 ---------------------------- */

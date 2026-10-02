@@ -609,7 +609,9 @@ app.get('/api/multi/:srcId/detail/:id', async (req, res) => {
 app.get('/api/multi/search', async (req, res) => {
   const wd = (req.query.wd || '').trim();
   if (!wd) return res.json({ keyword: '', results: [] });
-  const list = store.getSources().filter((s) => s.enabled !== false);
+  // 排除央视源：前端搜索已单独走 /api/search 取央视结果，此处重复查纯属浪费
+  // （央视源检索耗时最长，之前正是它把整体拖到 4s）
+  const list = store.getSources().filter((s) => s.enabled !== false && s.type !== 'cctv');
   const results = await sources.searchAll(list, wd, { page: parseInt(req.query.page, 10) || 1 });
   res.json({ keyword: wd, results: results.filter((r) => r.source) });
 });

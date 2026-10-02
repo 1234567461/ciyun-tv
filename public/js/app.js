@@ -910,9 +910,11 @@ async function pageLiveRoom(root, chId) {
 
   if (live.playable) {
     const p = new Player(host, {
+      // ⚠️ 接口返回的字段是 hls / flv（不是 src / flvSrc）——
+      //    原先误判字段名导致 lines 恒为空数组，播放器无源可播、页面一直转圈。
       lines: [
-        live.src ? { name: 'HLS 线路', type: 'hls', src: live.src, url: live.hls } : null,
-        live.flvSrc ? { name: 'FLV 线路', type: 'flv', src: live.flvSrc, url: live.flv } : null,
+        (live.src || live.hls) ? { name: 'HLS 线路', type: 'hls', src: live.src || live.hls, url: live.src || live.hls } : null,
+        (live.flvSrc || live.flv) ? { name: 'FLV 线路', type: 'flv', src: live.flvSrc || live.flv, url: live.flvSrc || live.flv } : null,
       ].filter(Boolean),
       autoplay: true,
       title: live.name,
@@ -990,6 +992,14 @@ const RES_TYPES = [
   { id: 'doc', name: '纪录片', icon: '🌍', keys: ['纪录片', '记录'] },
 ];
 
+/** 给 Promise 加超时兜底：超时则返回 fallback，避免个别慢源拖死整页渲染 */
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 /** 分类名是否命中某频道 */
 function resMatched(typeId, typeName) {
   const t = RES_TYPES.find((x) => x.id === typeId);
@@ -1046,62 +1056,84 @@ async function pageResource(root, typeId) {
       return;
     }
 
-    // 并发：每个源找到匹配该频道的分类，再拉第 1 页
-    const tasks = usable.map(async (src) => {
-      try {
-        const cats = await sourceCategories(src.id);
-        const hit = cats.filter((c) => resMatched(cur.id, c.name));
-        if (!hit.length) return { src, list: [] };
-        const chunks = await Promise.all(
-          hit.slice(0, 3).map((c) =>
-            api('/api/multi/' + src.id + '/list?typeId=' + encodeURIComponent(c.id) + '&page=1')
-              .then((d) => (d.list || []).map((v) => ({ ...v, _type: c.name })))
-              .catch(() => [])
-          )
-        );
-        const seen = new Set();
-        const list = chunks.flat().filter((v) => {
-          const k = (v.name || '').trim();
-          if (!k || seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        });
-        return { src, list };
-      } catch (e) {
-        return { src, list: [], error: e.message };
-      }
-    });
-
-    const results = await Promise.all(tasks);
+    // ⚡ 增量渲染：哪个源先返回就先展示，不再等全部源。
+    //    （原实现 Promise.all 要等 5 源 × 3 分类共 15 个请求全回来才渲染，实测约 15s，
+    //      用户以为页面是空的 → 只能靠搜索。现在首屏约 1s 即可见内容。）
     box.innerHTML = '';
-
-    const total = results.reduce((a, r) => a + r.list.length, 0);
-    if (!total) {
-      box.appendChild(emptyState('😕', cur.name + ' 频道暂无内容', '换个频道，或到后台启用更多资源源'));
-      return;
-    }
-
-    box.appendChild(h('div', { class: 'section-head' }, [
+    let total = 0;
+    let pending = usable.length;
+    let renderedHead = false;
+    const headEl = h('div', { class: 'section-head' }, [
       h('div', { class: 'section-title' }, [
         h('span', { class: 'icon', text: cur.icon }),
-        h('span', { text: cur.name + ' · 共 ' + total + ' 部' }),
+        h('span', { text: cur.name + ' · 共 0 部' }),
       ]),
-    ]));
+    ]);
+    const tail = h('div'); // 汇总区，始终留在最底部
+    box.append(headEl, tail);
 
-    results.filter((r) => r.list.length).forEach((r) => {
-      box.appendChild(h('div', { class: 'section-head', style: { marginTop: '26px' } }, [
-        h('div', { class: 'section-title' }, [
-          h('span', { class: 'icon', text: '📡' }),
-          h('span', { text: r.src.name }),
+    const bumpHead = () => {
+      headEl.querySelector('.section-title span:last-child').textContent = cur.name + ' · 共 ' + total + ' 部';
+    };
+    bumpHead();
+
+    const renderSource = (src, list) => {
+      if (!list.length) return;
+      total += list.length;
+      bumpHead();
+      const sec = h('div', { style: { marginTop: '26px' } }, [
+        h('div', { class: 'section-head' }, [
+          h('div', { class: 'section-title' }, [
+            h('span', { class: 'icon', text: '📡' }),
+            h('span', { text: src.name }),
+          ]),
+          h('span', { class: 'page-sub', text: list.length + ' 部' }),
         ]),
-        h('span', { class: 'page-sub', text: r.list.length + ' 部' }),
-      ]));
+      ]);
       const grid = h('div', { class: 'grid' });
-      r.list.slice(0, 30).forEach((v) => {
-        grid.appendChild(vodCard(v, r.src.id));
-      });
-      box.appendChild(grid);
-    });
+      list.slice(0, 30).forEach((v) => grid.appendChild(vodCard(v, src.id)));
+      sec.appendChild(grid);
+      box.insertBefore(sec, tail); // 插到汇总区之前，保持顺序稳定
+      renderedHead = true;
+    };
+
+    await Promise.all(
+      usable.map(async (src) => {
+        try {
+          const cats = await sourceCategories(src.id);
+          const hit = cats.filter((c) => resMatched(cur.id, c.name));
+          if (hit.length) {
+            // 分类内并发，但单源整体超时兜底，避免个别源拖死整页
+            const chunks = await withTimeout(
+              Promise.all(
+                hit.slice(0, 3).map((c) =>
+                  api('/api/multi/' + src.id + '/list?typeId=' + encodeURIComponent(c.id) + '&page=1')
+                    .then((d) => (d.list || []).map((v) => ({ ...v, _type: c.name })))
+                    .catch(() => [])
+                )
+              ),
+              6000,
+              []
+            );
+            const seen = new Set();
+            const list = chunks.flat().filter((v) => {
+              const k = (v.name || '').trim();
+              if (!k || seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+            renderSource(src, list);
+          }
+        } catch (_) {
+          /* 单源失败不影响其他源 */
+        } finally {
+          if (--pending === 0 && !renderedHead) {
+            box.innerHTML = '';
+            box.appendChild(emptyState('😕', cur.name + ' 频道暂无内容', '换个频道，或到后台启用更多资源源'));
+          }
+        }
+      })
+    );
   } catch (e) {
     box.innerHTML = '';
     box.appendChild(h('div', { class: 'error-box', text: '加载失败：' + e.message }));
@@ -1320,64 +1352,80 @@ async function pageSearch(root, q) {
     return;
   }
 
-  box.appendChild(sklRail('正在搜索「' + q + '」…', '🔍'));
-
-  // 双通道并行：央视网 + 多源聚合
-  const [cctvRes, multiRes] = await Promise.allSettled([
-    api('/api/search?q=' + encodeURIComponent(q)),
-    api('/api/multi/search?wd=' + encodeURIComponent(q)),
-  ]);
-
+  // ⚡ 流式渲染：央视网与资源库两条通道各返回各渲染，先到的先显示，
+  //    不再等两边都回来（原实现 Promise.allSettled 要等最慢的源，实测约 4s 才出结果）。
   box.innerHTML = '';
+  const loading = h('div', { class: 'page-sub', style: { padding: '6px 2px 2px', opacity: '.7' }, text: '正在搜索「' + q + '」…' });
+  box.appendChild(loading);
+
+  const cctvZone = h('div');
+  const multiZone = h('div');
+  const emptyZone = h('div');
+  box.append(cctvZone, multiZone, emptyZone);
+
   let shown = 0;
-
-  // ① 央视网结果
-  if (cctvRes.status === 'fulfilled' && cctvRes.value.list && cctvRes.value.list.length) {
-    const list = cctvRes.value.list.filter((v) => v.guid);
-    if (list.length) {
-      shown += list.length;
-      box.appendChild(h('div', { class: 'section-head', style: { marginTop: '8px' } }, [
-        h('div', { class: 'section-title' }, [
-          h('span', { class: 'icon', text: '📺' }),
-          h('span', { text: '央视网 · ' + list.length + ' 条' }),
-        ]),
-      ]));
-      const grid = h('div', { class: 'grid' });
-      list.forEach((v) => grid.appendChild(videoCard(v, (v) => go('/watch/' + v.guid))));
-      box.appendChild(grid);
+  let pending = 2;
+  const finishOne = () => {
+    if (--pending === 0) {
+      loading.remove();
+      if (!shown) {
+        emptyZone.appendChild(emptyState('😕', '没有找到「' + q + '」相关内容', '换个关键词试试，或到「资源库」按频道浏览'));
+      }
     }
-  }
+  };
 
-  // ② 影视资源库结果（动漫 / 美剧 / 电影 …）
-  if (multiRes.status === 'fulfilled') {
-    const results = (multiRes.value.results || []).filter((r) => (r.list || []).length);
-    const total = results.reduce((a, r) => a + r.list.length, 0);
-    if (total) {
-      shown += total;
-      box.appendChild(h('div', { class: 'section-head', style: { marginTop: '30px' } }, [
-        h('div', { class: 'section-title' }, [
-          h('span', { class: 'icon', text: '🗂️' }),
-          h('span', { text: '影视资源库 · ' + total + ' 条' }),
-        ]),
-      ]));
-      results.forEach((r) => {
-        box.appendChild(h('div', { class: 'section-head', style: { marginTop: '18px' } }, [
-          h('div', { class: 'section-title' }, [
-            h('span', { class: 'icon', text: '📡' }),
-            h('span', { text: r.source.name }),
+  // ① 央视网（通常很快，~0.1s，先出）
+  withTimeout(api('/api/search?q=' + encodeURIComponent(q)), 8000, { list: [] })
+    .then((d) => {
+      const list = ((d && d.list) || []).filter((v) => v.guid);
+      if (list.length) {
+        shown += list.length;
+        const sec = h('div', {}, [
+          h('div', { class: 'section-head', style: { marginTop: '8px' } }, [
+            h('div', { class: 'section-title' }, [
+              h('span', { class: 'icon', text: '📺' }),
+              h('span', { text: '央视网 · ' + list.length + ' 条' }),
+            ]),
           ]),
-          h('span', { class: 'page-sub', text: r.list.length + ' 条' }),
-        ]));
+        ]);
         const grid = h('div', { class: 'grid' });
-        r.list.slice(0, 24).forEach((v) => grid.appendChild(vodCard(v, r.source.id)));
-        box.appendChild(grid);
-      });
-    }
-  }
+        list.forEach((v) => grid.appendChild(videoCard(v, (v) => go('/watch/' + v.guid))));
+        sec.appendChild(grid);
+        cctvZone.appendChild(sec);
+      }
+    })
+    .catch(() => {})
+    .finally(finishOne);
 
-  if (!shown) {
-    box.appendChild(emptyState('😕', '没有找到「' + q + '」相关内容', '换个关键词试试，或到「资源库」按频道浏览'));
-  }
+  // ② 影视资源库（多源聚合，较慢，~4s，但不再阻塞央视结果展示）
+  withTimeout(api('/api/multi/search?wd=' + encodeURIComponent(q)), 12000, { results: [] })
+    .then((d) => {
+      const results = ((d && d.results) || []).filter((r) => (r.list || []).length);
+      const total = results.reduce((a, r) => a + r.list.length, 0);
+      if (total) {
+        shown += total;
+        multiZone.appendChild(h('div', { class: 'section-head', style: { marginTop: '30px' } }, [
+          h('div', { class: 'section-title' }, [
+            h('span', { class: 'icon', text: '🗂️' }),
+            h('span', { text: '影视资源库 · ' + total + ' 条' }),
+          ]),
+        ]));
+        results.forEach((r) => {
+          multiZone.appendChild(h('div', { class: 'section-head', style: { marginTop: '18px' } }, [
+            h('div', { class: 'section-title' }, [
+              h('span', { class: 'icon', text: '📡' }),
+              h('span', { text: r.source.name }),
+            ]),
+            h('span', { class: 'page-sub', text: r.list.length + ' 条' }),
+          ]));
+          const grid = h('div', { class: 'grid' });
+          r.list.slice(0, 24).forEach((v) => grid.appendChild(vodCard(v, r.source.id)));
+          multiZone.appendChild(grid);
+        });
+      }
+    })
+    .catch(() => {})
+    .finally(finishOne);
 
   function doSearch(kw) {
     if (!kw) return;

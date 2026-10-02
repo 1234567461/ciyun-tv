@@ -244,6 +244,55 @@ app.get('/api/home', async (req, res) => {
   }
 });
 
+/**
+ * 首页影视板块（来自采集源）
+ * ------------------------------------------------------------
+ * 原首页只聚合央视栏目，导致首页全是央视节目、看不到影视与动漫。
+ * 这里按分类并行拉取各采集源的最新更新，供首页渲染「最新更新」区。
+ *
+ * GET /api/home/vod?limit=12
+ */
+app.get('/api/home/vod', async (req, res) => {
+  const limit = Math.min(24, Math.max(6, parseInt(req.query.limit, 10) || 12));
+  try {
+    const pool = (store.getSources() || []).filter(
+      (s) => s && s.id && s.enabled !== false && !String(s.type || '').startsWith('cctv')
+    );
+    if (!pool.length) return res.json({ sections: [] });
+
+    // 首页展示的分类（按常见影视分类，取各源第一个可用源）
+    const WANT = [
+      { key: 'movie', label: '最新电影', ids: ['6', '7', '8', '9', '10'] },
+      { key: 'tv', label: '热播剧集', ids: ['12', '13', '15', '18'] },
+      { key: 'anime', label: '动漫番剧', ids: ['36', '37', '38', '20'] },
+      { key: 'show', label: '综艺娱乐', ids: ['39', '40', '41'] },
+    ];
+
+    const pickSource = async (ids, name) => {
+      for (const s of pool) {
+        for (const id of ids) {
+          try {
+            const r = await sources.call(s, 'list', { typeId: id, page: 1 });
+            if (r && r.list && r.list.length) {
+              return { source: s.id, sourceName: s.name, typeId: id, list: r.list.slice(0, limit) };
+            }
+          } catch { /* 试下一个 */ }
+        }
+      }
+      return null;
+    };
+
+    const results = await Promise.all(WANT.map((w) => pickSource(w.ids, w.label)));
+    const sections = results
+      .map((r, i) => (r ? { key: WANT[i].key, label: WANT[i].label, ...r } : null))
+      .filter(Boolean);
+
+    res.json({ sections });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /* ============================================================
  * API：播放
  * ============================================================ */
@@ -3962,7 +4011,7 @@ if (require.main === module) {
  */
 async function warmupCategories() {
   try {
-    const list = (store.sources || []).filter(
+    const list = (store.getSources() || []).filter(
       (s) => s && s.id && s.enabled !== false && !String(s.type || '').startsWith('cctv')
     );
     let ok = 0;

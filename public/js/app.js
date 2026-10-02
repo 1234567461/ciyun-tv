@@ -327,6 +327,11 @@ async function pageHome(root) {
     )
   );
 
+  // 影视板块（采集源）—— 先占位，拉到后流式插入，避免阻塞首页
+  const vodZone = h('div', { class: 'vod-zone' });
+  box.appendChild(vodZone);
+  loadVodSections(vodZone);
+
   // 最新更新（各分类块）
   for (const b of data.blocks || []) {
     const cat = data.categories.find((c) => c.id === b.categoryId);
@@ -341,6 +346,45 @@ async function pageHome(root) {
   }
 
   root.appendChild(main);
+}
+
+const VOD_META = {
+  movie: { icon: '🎬', href: '/resource?type=movie' },
+  tv: { icon: '📺', href: '/resource?type=tv' },
+  anime: { icon: '🎌', href: '/resource?type=anime' },
+  show: { icon: '🎤', href: '/resource?type=variety' },
+};
+
+/** 首页影视板块：异步拉取采集源最新更新，按板块流式渲染 */
+async function loadVodSections(zone) {
+  let sections = [];
+  try {
+    const d = await api('/api/home/vod?limit=12');
+    sections = (d && d.sections) || [];
+  } catch { /* 采集源不可用 → 首页仍显示央视栏目，不影响可用性 */ }
+
+  if (!sections.length || !zone.isConnected) return;
+  zone.innerHTML = '';
+  for (const s of sections) {
+    const meta = VOD_META[s.key] || { icon: '🎞️', href: '/resource' };
+    // 采集源字段为 name/pic，卡片组件用 title/image，这里做一次映射
+    const list = (s.list || []).map((v) => ({
+      title: v.name,
+      image: v.pic,
+      remarks: v.remarks,
+      typeName: v.typeName,
+      source: v.source,
+      id: v.id,
+    }));
+    zone.appendChild(
+      rail(s.label, list, {
+        icon: meta.icon,
+        moreHref: meta.href,
+        moreText: '查看更多',
+        renderItem: (v) => videoCard(v, () => go('/vod/' + v.source + '/' + v.id)),
+      })
+    );
+  }
 }
 
 function buildHero(data) {
@@ -1375,10 +1419,24 @@ async function pageVod(root, srcId, vodId) {
       lineIndex: curLine,
     });
   }
-  const saveTimer = setInterval(() => saveProgress(), 5000);
-  // 离开页面立即落盘
-  const onLeave = () => { saveProgress(true); clearInterval(saveTimer); window.removeEventListener('beforeunload', onLeave); };
-  window.addEventListener('beforeunload', onLeave);
+  const saveTimer = setInterval(() => {
+    // 页面已被路由销毁 → 落盘最后一次并停止，避免后台空转
+    if (!playerHost.isConnected) { saveProgress(true); clearInterval(saveTimer); return; }
+    saveProgress();
+  }, 5000);
+  // SPA 切页不会触发 beforeunload，这里用 pagehide 兜住真正的关页/刷新
+  const onLeave = () => saveProgress(true);
+  window.addEventListener('pagehide', onLeave);
+  // 路由切走（DOM 被替换）时立即落盘：观察父容器，一旦本页被摘除就保存
+  const lifeObserver = new MutationObserver(() => {
+    if (!playerHost.isConnected) {
+      saveProgress(true);
+      clearInterval(saveTimer);
+      window.removeEventListener('pagehide', onLeave);
+      lifeObserver.disconnect();
+    }
+  });
+  lifeObserver.observe(root, { childList: true });
 
   function switchEp() {
     saveProgress(true);                   // 切集前先存住上一集进度

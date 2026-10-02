@@ -191,3 +191,96 @@
 .footer a { color: var(--text-dim); }
 .footer a:hover { color: var(--primary); }
 .footer .disclaimer { max-width: 780px; margin: 10px auto 0; font-size: 12.5px; }
+
+/* ============================================================
+   影视资源库（多源聚合）
+   ============================================================ */
+.res-hero-title {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 26px; font-weight: 800; color: var(--text, #f0f0f5);
+  margin-bottom: 8px;
+}
+.res-hero-title .icon { font-size: 28px; }
+
+.hot-words .chip.on {
+  background: var(--primary, #e50914);
+  border-color: var(--primary, #e50914);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* 剧集选集网格 */
+.ep-box { margin-top: 22px; }
+.ep-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+  gap: 8px;
+}
+.ep-chip {
+  padding: 9px 6px; border-radius: 8px; cursor: pointer;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09);
+  color: var(--text, #f0f0f5); font-size: 12.5px; font-family: inherit;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: all .16s;
+}
+.ep-chip:hover { background: rgba(255,255,255,.11); border-color: rgba(255,255,255,.22); }
+.ep-chip.on {
+  background: var(--primary, #e50914); border-color: var(--primary, #e50914);
+  color: #fff; font-weight: 600;
+}
+
+/* 线路切换条 */
+.line-bar {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin: 14px 0 4px;
+}
+.line-chip {
+  padding: 8px 16px; border-radius: 20px; cursor: pointer;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09);
+  color: var(--text-dim, #9a9aa8); font-size: 13px; font-family: inherit;
+  transition: all .16s;
+}
+.line-chip:hover { color: var(--text, #f0f0f5); border-color: rgba(255,255,255,.2); }
+.line-chip.on {
+  background: var(--primary, #e50914); border-color: var(--primary, #e50914);
+  color: #fff; font-weight: 600;
+}
+
+/* 剧情简介 */
+.vod-brief { font-size: 13.5px; line-height: 1.85; color: var(--text-dim, #9a9aa8); margin-top: 10px; }
+.vod-meta-line { font-size: 13px; color: var(--text-mute, #6a6a78); margin-top: 10px; }
+
+/* 播放页骨架 */
+.watch-skel { height: 62vh; border-radius: 14px; }
+
+/* ============================================================
+   直播 · 实时节目单条
+   ============================================================ */
+.live-now {
+  display: flex; align-items: center; gap: 20px;
+  padding: 16px 20px; margin: 2px 0 18px;
+  background: linear-gradient(135deg, rgba(229,9,20,.10), rgba(229,9,20,.03));
+  border: 1px solid rgba(229,9,20,.30); border-radius: 14px;
+}
+.live-now .ln-left { flex: 1; min-width: 0; }
+.live-now .ln-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--primary, #e50914); font-weight: 700; letter-spacing: .4px; }
+.live-now .ln-dotp {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--primary, #e50914);
+  animation: ln-pulse 1.4s infinite;
+}
+@keyframes ln-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+.live-now .ln-title { font-size: 16.5px; font-weight: 600; color: var(--text, #f0f0f5); margin: 7px 0 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-now .ln-time { font-size: 12.5px; color: var(--text-mute, #6a6a78); }
+.live-now .ln-right { flex: none; width: 190px; text-align: right; }
+.live-now .ln-progress {
+  height: 6px; border-radius: 4px; overflow: hidden;
+  background: rgba(255,255,255,.10); margin-bottom: 8px;
+}
+.live-now .ln-progress i { display: block; height: 100%; background: linear-gradient(90deg, #e50914, #ff6b6b); transition: width .5s; }
+.live-now .ln-remain { font-size: 12.5px; color: var(--text-dim, #9a9aa8); }
+.tag-warn { background: rgba(245,158,11,.16); color: #f59e0b; }
+
+@media (max-width: 640px) {
+  .live-now { flex-direction: column; align-items: stretch; gap: 12px; }
+  .live-now .ln-right { width: 100%; text-align: left; }
+}

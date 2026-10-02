@@ -2,7 +2,7 @@
    慈云影视 · 主应用（路由 + 页面）
    ============================================================ */
 
-import { h, api, go, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime } from './util.js';
+import { h, api, go, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor } from './util.js';
 import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn } from './components.js';
 import { Player, detectType } from './player.js';
 import { auth, avatarEl } from './auth.js';
@@ -52,12 +52,14 @@ function renderHeader() {
   const navMap = [
     { href: '#/', text: '首页', match: ['/'] },
     { href: '#/discover', text: '发现', match: ['/discover'] },
+    { href: '#/resource?type=anime', text: '动漫', match: ['/resource'] },
+    { href: '#/resource?type=us', text: '美剧', match: ['/resource'] },
+    { href: '#/resource?type=movie', text: '电影', match: ['/resource'] },
     { href: '#/live', text: '电视直播', match: ['/live'] },
     { href: '#/family', text: '家庭共享', match: ['/family'] },
     { href: '#/category/news', text: '新闻', match: ['/category/news'] },
     { href: '#/category/documentary', text: '纪录片', match: ['/category/documentary'] },
-    { href: '#/category/movie', text: '影视', match: ['/category/movie'] },
-    { href: '#/category/anime', text: '动画', match: ['/category/anime'] },
+    { href: '#/category/anime', text: '央视动画', match: ['/category/anime'] },
     { href: '#/fav', text: '我的收藏', match: ['/fav'] },
   ];
 
@@ -224,11 +226,14 @@ async function route() {
     if (seg[0] === 'column') return pageColumn(root, seg[1], parseInt(params.get('p')) || 1);
     if (seg[0] === 'watch') return pageWatch(root, seg[1]);
     if (seg[0] === 'live') return seg[1] ? pageLiveRoom(root, seg[1]) : pageLive(root);
+    if (seg[0] === 'resource') return pageResource(root, params.get('type') || '', parseInt(params.get('p')) || 1);
+    if (seg[0] === 'vod') return pageVod(root, seg[1], seg[2]);
     if (seg[0] === 'search') return pageSearch(root, params.get('q') || '');
     if (seg[0] === 'fav') return pageFav(root);
     if (seg[0] === 'history') return pageHistory(root);
     if (seg[0] === 'login') return pageAuth(root, 'login');
     if (seg[0] === 'register') return pageAuth(root, 'register');
+    if (seg[0] === 'forgot') return pageForgot(root);
     if (seg[0] === 'profile') return pageProfile(root, params.get('tab') || 'info');
     if (seg[0] === 'family') return renderFamilyPage(root, state.site);
     if (seg[0] === 'vip') return renderVipPage(root, state.site, { tab: params.get('tab') || 'plans' });
@@ -850,7 +855,8 @@ async function pageLiveRoom(root, chId) {
         h('h1', { class: 'player-title', text: live.name || chId.toUpperCase() }),
         h('div', { class: 'player-meta' }, [
           h('span', { class: 'live-badge' }, [h('span', { class: 'dotp' }), h('span', { text: 'LIVE' })]),
-          epg && epg.isLive ? h('span', { text: '正在播出：' + epg.isLive }) : null,
+          live.resolution ? h('span', { class: 'tag', text: live.resolution }) : null,
+          live.audioOnly ? h('span', { class: 'tag tag-warn', text: '仅音频' }) : null,
         ]),
       ]),
       h('div', { class: 'player-actions' }, [
@@ -858,6 +864,49 @@ async function pageLiveRoom(root, chId) {
       ]),
     ])
   );
+
+  // 🔴 实时节目单：正在播的节目 + 播放进度（来自 nowepg 接口，30 秒刷新）
+  if (live.now) {
+    const nowBox = h('div', { class: 'live-now' });
+    const paint = (n) => {
+      nowBox.innerHTML = '';
+      if (!n) return;
+      nowBox.appendChild(h('div', { class: 'ln-left' }, [
+        h('div', { class: 'ln-label' }, [
+          h('span', { class: 'ln-dotp' }),
+          h('span', { text: '正在播出' }),
+        ]),
+        h('div', { class: 'ln-title', text: n.title || '—' }),
+        h('div', { class: 'ln-time', text: (n.startText || '') + ' — ' + (n.endText || '') }),
+      ]));
+      nowBox.appendChild(h('div', { class: 'ln-right' }, [
+        h('div', { class: 'ln-progress' }, [
+          h('i', { style: { width: Math.min(100, Math.max(0, n.progress || 0)) + '%' } }),
+        ]),
+        h('div', { class: 'ln-remain', text: n.remaining > 0 ? ('还有 ' + n.remaining + ' 分钟') : '即将结束' }),
+      ]));
+    };
+    paint(live.now);
+    main.appendChild(nowBox);
+
+    // 自动刷新进度（本地推进 + 每 30 秒重新拉取）
+    let local = { ...live.now };
+    const tick = setInterval(() => {
+      if (!nowBox.isConnected) { clearInterval(tick); return; }
+      if (local.end > local.start) {
+        const elapsed = Math.min(local.end - local.start, Date.now() - local.start);
+        local.progress = Math.round((elapsed / (local.end - local.start)) * 100);
+        local.remaining = Math.max(0, Math.round((local.end - Date.now()) / 60000));
+        paint(local);
+      }
+    }, 15000);
+    setTimeout(async () => {
+      try {
+        const d = await api('/api/live/' + chId);
+        if (d.now && nowBox.isConnected) { local = { ...d.now }; paint(local); }
+      } catch {}
+    }, 30000);
+  }
 
   if (live.playable) {
     const p = new Player(host, {
@@ -928,11 +977,321 @@ async function pageLiveRoom(root, chId) {
 }
 
 /* ============================================================
+   影视资源库（动漫 / 美剧 / 电影 / 电视剧 … 多源聚合）
+   ============================================================ */
+
+/** 资源库频道定义：把「用户语言」映射到各采集源的分类名 */
+const RES_TYPES = [
+  { id: 'anime', name: '动漫', icon: '🎌', keys: ['动漫', '动画', '国漫', '中国动漫', '日本动漫', '日韩动漫', '海外动漫', '欧美动漫'] },
+  { id: 'us', name: '美剧', icon: '🇺🇸', keys: ['美剧', '欧美剧', '欧美'] },
+  { id: 'movie', name: '电影', icon: '🎬', keys: ['电影', '动作片', '喜剧片', '科幻片', '恐怖片', '爱情片', '战争片', '剧情片', '纪录片电影'] },
+  { id: 'tv', name: '电视剧', icon: '📺', keys: ['电视剧', '国产剧', '港台剧', '日韩剧', '连续剧', '国产'] },
+  { id: 'variety', name: '综艺', icon: '🎤', keys: ['综艺', '真人秀', '脱口秀'] },
+  { id: 'doc', name: '纪录片', icon: '🌍', keys: ['纪录片', '记录'] },
+];
+
+/** 分类名是否命中某频道 */
+function resMatched(typeId, typeName) {
+  const t = RES_TYPES.find((x) => x.id === typeId);
+  if (!t) return false;
+  const n = String(typeName || '');
+  return t.keys.some((k) => n.includes(k));
+}
+
+/** 缓存各源的分类，避免重复请求 */
+const _catCache = new Map();
+async function sourceCategories(srcId) {
+  if (_catCache.has(srcId)) return _catCache.get(srcId);
+  try {
+    const d = await api('/api/multi/' + srcId + '/categories');
+    const list = d.categories || [];
+    _catCache.set(srcId, list);
+    return list;
+  } catch {
+    _catCache.set(srcId, []);
+    return [];
+  }
+}
+
+/** 资源库总览页：#/resource?type=anime */
+async function pageResource(root, typeId) {
+  const cur = RES_TYPES.find((x) => x.id === typeId) || RES_TYPES[0];
+
+  root.appendChild(h('div', { class: 'search-hero' }, [
+    h('div', { class: 'res-hero-title' }, [
+      h('span', { class: 'icon', text: '🗂️' }),
+      h('span', { text: '影视资源库' }),
+    ]),
+    h('div', { class: 'page-sub', text: '多源聚合 · 动漫 / 美剧 / 电影 / 电视剧，海量在线资源' }),
+    h('div', { class: 'hot-words', style: { marginTop: '14px' } },
+      RES_TYPES.map((t) => h('button', {
+        class: 'chip' + (t.id === cur.id ? ' on' : ''),
+        text: t.icon + ' ' + t.name,
+        onclick: () => go('/resource?type=' + t.id),
+      }))
+    ),
+  ]));
+
+  const main = h('div', { class: 'main' }, [h('div', { class: 'container' })]);
+  root.appendChild(main);
+  const box = main.querySelector('.container');
+  box.appendChild(sklRail('正在加载 ' + cur.name + ' …', cur.icon));
+
+  try {
+    const { sources: srcList } = await api('/api/multi/sources');
+    const usable = (srcList || []).filter((s) => s.enabled !== false && s.type !== 'cctv');
+    if (!usable.length) {
+      box.innerHTML = '';
+      box.appendChild(emptyState('🔌', '暂无可用的资源源', '请到后台「自定义源」添加并启用采集源'));
+      return;
+    }
+
+    // 并发：每个源找到匹配该频道的分类，再拉第 1 页
+    const tasks = usable.map(async (src) => {
+      try {
+        const cats = await sourceCategories(src.id);
+        const hit = cats.filter((c) => resMatched(cur.id, c.name));
+        if (!hit.length) return { src, list: [] };
+        const chunks = await Promise.all(
+          hit.slice(0, 3).map((c) =>
+            api('/api/multi/' + src.id + '/list?typeId=' + encodeURIComponent(c.id) + '&page=1')
+              .then((d) => (d.list || []).map((v) => ({ ...v, _type: c.name })))
+              .catch(() => [])
+          )
+        );
+        const seen = new Set();
+        const list = chunks.flat().filter((v) => {
+          const k = (v.name || '').trim();
+          if (!k || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        return { src, list };
+      } catch (e) {
+        return { src, list: [], error: e.message };
+      }
+    });
+
+    const results = await Promise.all(tasks);
+    box.innerHTML = '';
+
+    const total = results.reduce((a, r) => a + r.list.length, 0);
+    if (!total) {
+      box.appendChild(emptyState('😕', cur.name + ' 频道暂无内容', '换个频道，或到后台启用更多资源源'));
+      return;
+    }
+
+    box.appendChild(h('div', { class: 'section-head' }, [
+      h('div', { class: 'section-title' }, [
+        h('span', { class: 'icon', text: cur.icon }),
+        h('span', { text: cur.name + ' · 共 ' + total + ' 部' }),
+      ]),
+    ]));
+
+    results.filter((r) => r.list.length).forEach((r) => {
+      box.appendChild(h('div', { class: 'section-head', style: { marginTop: '26px' } }, [
+        h('div', { class: 'section-title' }, [
+          h('span', { class: 'icon', text: '📡' }),
+          h('span', { text: r.src.name }),
+        ]),
+        h('span', { class: 'page-sub', text: r.list.length + ' 部' }),
+      ]));
+      const grid = h('div', { class: 'grid' });
+      r.list.slice(0, 30).forEach((v) => {
+        grid.appendChild(vodCard(v, r.src.id));
+      });
+      box.appendChild(grid);
+    });
+  } catch (e) {
+    box.innerHTML = '';
+    box.appendChild(h('div', { class: 'error-box', text: '加载失败：' + e.message }));
+  }
+}
+
+/** 采集源影片卡片 */
+function vodCard(v, srcId) {
+  const thumb = h('div', { class: 'card-thumb' });
+  if (v.pic) {
+    const img = h('img', { alt: v.name, loading: 'lazy' });
+    img.onerror = () => { img.remove(); thumb.style.background = titleColor(v.name || 'x'); };
+    img.src = v.pic;
+    thumb.appendChild(img);
+  } else {
+    thumb.style.background = titleColor(v.name || 'x');
+  }
+  return h('div', {
+    class: 'card',
+    title: v.name,
+    onclick: () => go('/vod/' + srcId + '/' + v.id),
+  }, [
+    thumb,
+    v.remarks ? h('div', { class: 'card-dur', text: v.remarks }) : null,
+    h('div', { class: 'card-play', html: '<svg width="22" height="22" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>' }),
+    h('div', { class: 'card-title', text: v.name }),
+  ]);
+}
+
+/** 资源详情与播放页：#/vod/:srcId/:id */
+async function pageVod(root, srcId, vodId) {
+  root.appendChild(h('div', { class: 'watch-wrap' }, [h('div', { class: 'watch-skel skl' })]));
+
+  let detail;
+  try {
+    detail = await api('/api/multi/' + srcId + '/detail/' + vodId);
+  } catch (e) {
+    root.innerHTML = '';
+    root.appendChild(h('div', { class: 'error-box', text: '影片加载失败：' + e.message }));
+    return;
+  }
+  root.innerHTML = '';
+
+  // 线路与剧集归一
+  const lines = (detail.lines || []).map((l, i) => ({
+    id: 'ln' + i,
+    name: l.name || ('线路' + (i + 1)),
+    type: 'hls',
+    episodes: l.episodes || [],
+  })).filter((l) => l.episodes.length);
+
+  const wrap = h('div', { class: 'watch-wrap' });
+  root.appendChild(wrap);
+
+  const playerHost = h('div', { class: 'player-host' });
+  wrap.appendChild(playerHost);
+
+  if (!lines.length) {
+    playerHost.appendChild(h('div', { class: 'error-box', text: '该影片暂无可播放线路' }));
+    return;
+  }
+
+  // 当前线路 / 集
+  let curLine = 0;
+  let curEp = 0;
+  const playUrl = () => lines[curLine].episodes[curEp].url;
+
+  const epTitle = () => {
+    const ep = lines[curLine].episodes[curEp] || {};
+    return (detail.name || '') + (ep.name ? ' · ' + ep.name : '');
+  };
+
+  const info = {
+    title: epTitle(),
+    image: detail.pic || '',
+  };
+
+  // 播放器（经本地 /api/stream 代理，规避跨域与防盗链）
+  const proxied = (u) => '/api/stream?url=' + encodeURIComponent(u);
+  let player = new Player(playerHost, {
+    lines: [{ id: 'main', name: '线路 1', type: 'hls', url: proxied(playUrl()) }],
+    title: info.title,
+    poster: info.image,
+    autoplay: true,
+    autoFailover: true,
+    onEnded: () => {
+      // 自动下一集
+      if (curEp < lines[curLine].episodes.length - 1) { curEp += 1; switchEp(); }
+    },
+  });
+
+  // 头部信息
+  const headBar = h('div', { class: 'player-head' }, [
+    h('div', {}, [
+      h('h1', { class: 'player-title', text: detail.name || '影片' }),
+      h('div', { class: 'player-meta' }, [
+        detail.remarks ? h('span', { class: 'tag tag-primary', text: detail.remarks }) : null,
+        detail.year ? h('span', { text: detail.year }) : null,
+        detail.area ? h('span', { text: String(detail.area).trim() }) : null,
+        detail.typeName ? h('span', { text: detail.typeName }) : null,
+      ]),
+    ]),
+    h('div', { class: 'player-actions' }, [
+      h('button', {
+        class: 'btn btn-ghost btn-sm',
+        html: fav.has('#/vod/' + srcId + '/' + vodId) ? '★ 已收藏' : '☆ 收藏',
+        onclick: (e) => {
+          const on = fav.toggle({ guid: 'vod:' + srcId + ':' + vodId, title: detail.name, image: detail.pic, url: location.hash });
+          e.target.innerHTML = on ? '★ 已收藏' : '☆ 收藏';
+          toast(on ? '已加入收藏' : '已取消收藏', 'success');
+        },
+      }),
+      h('a', { class: 'btn btn-primary btn-sm', href: '#/resource', text: '更多资源' }),
+    ]),
+  ]);
+  wrap.appendChild(headBar);
+
+  // 线路切换
+  const lineBar = h('div', { class: 'line-bar' });
+  const renderLines = (active) => {
+    lineBar.innerHTML = '';
+    lines.forEach((l, i) => {
+      lineBar.appendChild(h('button', {
+        class: 'line-chip' + (i === active ? ' on' : ''),
+        text: l.name + '（' + l.episodes.length + '）',
+        onclick: () => { curLine = i; curEp = 0; switchEp(); renderLines(i); },
+      }));
+    });
+  };
+  wrap.appendChild(lineBar);
+  renderLines(0);
+
+  // 剧集列表
+  const epBox = h('div', { class: 'ep-box' });
+  wrap.appendChild(epBox);
+
+  function renderEps() {
+    epBox.innerHTML = '';
+    epBox.appendChild(h('div', { class: 'section-title', style: { marginBottom: '12px' } }, [
+      h('span', { class: 'icon', text: '🎞️' }),
+      h('span', { text: '选集（' + lines[curLine].episodes.length + '）' }),
+    ]));
+    const grid = h('div', { class: 'ep-grid' });
+    lines[curLine].episodes.forEach((ep, i) => {
+      grid.appendChild(h('button', {
+        class: 'ep-chip' + (i === curEp ? ' on' : ''),
+        text: ep.name || String(i + 1),
+        onclick: () => { curEp = i; switchEp(); },
+      }));
+    });
+    epBox.appendChild(grid);
+  }
+
+  function switchEp() {
+    if (player && player.destroy) { try { player.destroy(); } catch {} }
+    playerHost.innerHTML = '';
+    player = new Player(playerHost, {
+      lines: [{ id: 'main', name: lines[curLine].name, type: 'hls', url: proxied(playUrl()) }],
+      title: epTitle(),
+      poster: info.image,
+      autoplay: true,
+      autoFailover: true,
+      onEnded: () => {
+        if (curEp < lines[curLine].episodes.length - 1) { curEp += 1; switchEp(); }
+      },
+    });
+    playerHost.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    renderEps();
+    renderLines(curLine);
+  }
+
+  // 简介
+  if (detail.content) {
+    wrap.appendChild(h('div', { class: 'card', style: { marginTop: '22px' } }, [
+      h('h3', { text: '📖 剧情简介' }),
+      h('p', { class: 'vod-brief', text: detail.content }),
+      detail.actor ? h('p', { class: 'vod-meta-line', text: '主演：' + detail.actor }) : null,
+      detail.director ? h('p', { class: 'vod-meta-line', text: '导演：' + detail.director }) : null,
+    ]));
+  }
+
+  switchEp();
+}
+
+/* ============================================================
    搜索
    ============================================================ */
 async function pageSearch(root, q) {
   const input = h('input', {
-    placeholder: '输入关键词，如：纪录片、新闻、百家讲坛…',
+    placeholder: '输入关键词，如：罗小黑、美剧、纪录片…',
     value: q,
     onkeydown: (e) => { if (e.key === 'Enter') doSearch(e.target.value.trim()); },
   });
@@ -945,7 +1304,7 @@ async function pageSearch(root, q) {
         h('button', { class: 'btn btn-primary btn-sm', text: '搜索', onclick: () => doSearch(input.value.trim()) }),
       ]),
       h('div', { class: 'hot-words' },
-        ['纪录片', '新闻联播', '百家讲坛', '探索发现', '动物世界', '国家记忆', '动画片', '足球'].map((w) =>
+        ['罗小黑', '海贼王', '美剧', '火影忍者', '纪录片', '新闻联播', '百家讲坛', '动画片'].map((w) =>
           h('button', { class: 'chip', text: w, onclick: () => { input.value = w; doSearch(w); } })
         )
       ),
@@ -957,29 +1316,67 @@ async function pageSearch(root, q) {
   const box = main.querySelector('.container');
 
   if (!q) {
-    box.appendChild(emptyState('🔍', '搜索你想看的内容', '支持搜索央视网全部公开视频资源'));
+    box.appendChild(emptyState('🔍', '搜索你想看的内容', '同时搜索央视网与影视资源库（动漫 / 美剧 / 电影 / 电视剧）'));
     return;
   }
 
-  box.appendChild(sklRail('搜索中…', '🔍'));
-  try {
-    const d = await api('/api/search?q=' + encodeURIComponent(q));
-    box.innerHTML = '';
-    if (!d.list || !d.list.length) {
-      box.appendChild(emptyState('😕', '没有找到「' + q + '」相关内容', '换个关键词试试'));
-      return;
+  box.appendChild(sklRail('正在搜索「' + q + '」…', '🔍'));
+
+  // 双通道并行：央视网 + 多源聚合
+  const [cctvRes, multiRes] = await Promise.allSettled([
+    api('/api/search?q=' + encodeURIComponent(q)),
+    api('/api/multi/search?wd=' + encodeURIComponent(q)),
+  ]);
+
+  box.innerHTML = '';
+  let shown = 0;
+
+  // ① 央视网结果
+  if (cctvRes.status === 'fulfilled' && cctvRes.value.list && cctvRes.value.list.length) {
+    const list = cctvRes.value.list.filter((v) => v.guid);
+    if (list.length) {
+      shown += list.length;
+      box.appendChild(h('div', { class: 'section-head', style: { marginTop: '8px' } }, [
+        h('div', { class: 'section-title' }, [
+          h('span', { class: 'icon', text: '📺' }),
+          h('span', { text: '央视网 · ' + list.length + ' 条' }),
+        ]),
+      ]));
+      const grid = h('div', { class: 'grid' });
+      list.forEach((v) => grid.appendChild(videoCard(v, (v) => go('/watch/' + v.guid))));
+      box.appendChild(grid);
     }
-    box.appendChild(h('div', { class: 'section-head' }, [
-      h('div', { class: 'section-title' }, [h('span', { class: 'icon', text: '🔍' }), h('span', { text: `「${q}」的搜索结果（${d.list.length}）` })]),
-    ]));
-    const grid = h('div', { class: 'grid' });
-    d.list
-      .filter((v) => v.guid)
-      .forEach((v) => grid.appendChild(videoCard(v, (v) => go('/watch/' + v.guid))));
-    box.appendChild(grid);
-  } catch (e) {
-    box.innerHTML = '';
-    box.appendChild(h('div', { class: 'error-box', text: '搜索失败：' + e.message }));
+  }
+
+  // ② 影视资源库结果（动漫 / 美剧 / 电影 …）
+  if (multiRes.status === 'fulfilled') {
+    const results = (multiRes.value.results || []).filter((r) => (r.list || []).length);
+    const total = results.reduce((a, r) => a + r.list.length, 0);
+    if (total) {
+      shown += total;
+      box.appendChild(h('div', { class: 'section-head', style: { marginTop: '30px' } }, [
+        h('div', { class: 'section-title' }, [
+          h('span', { class: 'icon', text: '🗂️' }),
+          h('span', { text: '影视资源库 · ' + total + ' 条' }),
+        ]),
+      ]));
+      results.forEach((r) => {
+        box.appendChild(h('div', { class: 'section-head', style: { marginTop: '18px' } }, [
+          h('div', { class: 'section-title' }, [
+            h('span', { class: 'icon', text: '📡' }),
+            h('span', { text: r.source.name }),
+          ]),
+          h('span', { class: 'page-sub', text: r.list.length + ' 条' }),
+        ]));
+        const grid = h('div', { class: 'grid' });
+        r.list.slice(0, 24).forEach((v) => grid.appendChild(vodCard(v, r.source.id)));
+        box.appendChild(grid);
+      });
+    }
+  }
+
+  if (!shown) {
+    box.appendChild(emptyState('😕', '没有找到「' + q + '」相关内容', '换个关键词试试，或到「资源库」按频道浏览'));
   }
 
   function doSearch(kw) {
@@ -1074,6 +1471,51 @@ function pageAuth(root, mode) {
   const pwdMeter = h('div', { class: 'pwd-meter', 'data-s': '0' }, [h('i'), h('i'), h('i'), h('i')]);
   const errBox = h('div', { class: 'err', style: { display: 'none' } });
 
+  /* ---------- 邮箱验证码辅助（登录 / 注册 / 找回密码共用） ---------- */
+  const mkCodeField = (key, scene, emailGetter) => {
+    const input = h('input', { placeholder: '6 位验证码', maxlength: '6', inputmode: 'numeric', name: key });
+    fields[key] = input;
+    const btn = h('button', { class: 'btn btn-ghost btn-sm send-code', text: '获取验证码', type: 'button' });
+    const wrap = h('div', { class: 'input-wrap has-btn' }, [
+      h('span', { class: 'ico', html: shieldIcon() }),
+      input,
+      btn,
+    ]);
+    let timer = null;
+    btn.onclick = async () => {
+      const email = (emailGetter ? emailGetter() : fields.email.value || '').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErr('请先填写正确的邮箱地址', 'email');
+      btn.disabled = true;
+      btn.textContent = '发送中…';
+      try {
+        const r = await api('/api/mail/code', { method: 'POST', body: { email, scene } });
+        let left = 60;
+        const tick = () => {
+          if (left <= 0) { clearInterval(timer); btn.disabled = false; btn.textContent = '重新获取'; return; }
+          btn.textContent = left + 's 后重发';
+          left -= 1;
+        };
+        tick();
+        timer = setInterval(tick, 1000);
+        if (r.devMode && r.devCode) {
+          input.value = r.devCode;
+          toast('开发模式：验证码 ' + r.devCode + ' 已自动填入', 'info');
+        } else {
+          toast(r.message || '验证码已发送', 'success');
+        }
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '获取验证码';
+        showErr(e.message || '发送失败');
+      }
+    };
+    return wrap;
+  };
+
+  /* ---------- 登录方式切换：密码 / 邮箱验证码 ---------- */
+  let loginMode = 'password'; // password | email
+  const modeSwitch = h('div', { class: 'auth-tabs' });
+
   const accountField = h('div', { class: 'field' }, [
     h('label', { text: '账号' }),
     mkInput('account', { placeholder: '4-20 位，字母开头', icon: userIcon(), autocomplete: 'username' }),
@@ -1086,6 +1528,18 @@ function pageAuth(root, mode) {
     isReg ? pwdMeter : null,
     isReg ? h('div', { class: 'hint', text: '至少 8 位，需同时包含字母和数字' }) : null,
   ]);
+
+  // 邮箱登录块（仅登录页、且站点开启邮箱登录时）
+  const emailLoginOn = !isReg && c.emailLogin !== false;
+  const emailField = h('div', { class: 'field' }, [
+    h('label', { text: '邮箱' }),
+    mkInput('email', { placeholder: 'your@email.com', icon: mailIcon(), autocomplete: 'email' }),
+  ]);
+  const emailCodeField = h('div', { class: 'field' }, [
+    h('label', { text: '邮箱验证码' }),
+    mkCodeField('emailCode', 'login', () => fields.email.value),
+  ]);
+  const emailBox = h('div', { class: 'email-login-box' }, [emailField, emailCodeField]);
 
   if (isReg) {
     fields.password.addEventListener('input', () => {
@@ -1100,13 +1554,19 @@ function pageAuth(root, mode) {
           mkInput('nickname', { placeholder: '显示名称，最多 16 字', icon: tagIcon(), autocomplete: 'nickname' }),
         ]),
         h('div', { class: 'field' }, [
-          h('label', { text: '邮箱' + (c.needEmail ? '' : '（选填）') }),
-          mkInput('email', { placeholder: '用于找回账号', icon: mailIcon(), autocomplete: 'email' }),
+          h('label', { text: '邮箱' + (c.needEmail || c.verifyEmail ? '' : '（选填）') }),
+          mkInput('email', { placeholder: '用于登录与找回密码', icon: mailIcon(), autocomplete: 'email' }),
         ]),
-        isReg ? h('div', { class: 'field' }, [
+        c.verifyEmail
+          ? h('div', { class: 'field' }, [
+              h('label', { text: '邮箱验证码' }),
+              mkCodeField('emailCode', 'register', () => fields.email.value),
+            ])
+          : null,
+        h('div', { class: 'field' }, [
           h('label', { text: '确认密码' }),
           mkInput('confirm', { type: 'password', placeholder: '再次输入密码', icon: lockIcon(), autocomplete: 'new-password' }),
-        ]) : null,
+        ]),
       ]
     : [];
 
@@ -1122,16 +1582,45 @@ function pageAuth(root, mode) {
       ? h('div', { class: 'auth-notice', text: '📌 注册后可发表评论，新评论需经管理员审核后公开显示' })
       : null,
     errBox,
-    accountField,
-    pwdField,
-    ...extraFields.filter(Boolean),
+    emailLoginOn ? modeSwitch : null,
+    loginMode === 'password' ? h('div', {}, [accountField, pwdField, ...extraFields.filter(Boolean)]) : emailBox,
     submitBtn,
+    !isReg ? h('div', { class: 'auth-links' }, [
+      h('a', { href: '#/forgot', text: '忘记密码？' }),
+    ]) : null,
     h('div', { class: 'auth-foot' }, isReg
       ? ['已有账号？', h('a', { href: '#/login' + (redirect !== '#/' ? '?redirect=' + encodeURIComponent(redirect) : ''), text: '立即登录' })]
       : ['还没有账号？', h('a', { href: '#/register' + (redirect !== '#/' ? '?redirect=' + encodeURIComponent(redirect) : ''), text: '免费注册' })]),
   ]);
 
   root.appendChild(h('div', { class: 'auth-page' }, [card]));
+
+  /** 重绘登录方式切换 */
+  const paintMode = () => {
+    if (!emailLoginOn) return;
+    modeSwitch.innerHTML = '';
+    [['password', '账号密码'], ['email', '邮箱验证码']].forEach(([m, label]) => {
+      modeSwitch.appendChild(h('button', {
+        class: 'auth-tab' + (loginMode === m ? ' on' : ''),
+        text: label,
+        onclick: () => {
+          loginMode = m;
+          errBox.style.display = 'none';
+          const body = card.querySelector('.auth-body') || card;
+          // 简易重绘：直接切换节点显示
+          if (m === 'email') {
+            accountField.replaceWith(emailBox);
+            // 保证 emailBox 在 submitBtn 之前
+          } else {
+            emailBox.replaceWith(h('div', { class: 'pwd-stack' }, [accountField, pwdField, ...extraFields.filter(Boolean)]));
+          }
+          paintMode();
+          submitBtn.textContent = m === 'email' ? '邮箱登录' : '登 录';
+        },
+      }));
+    });
+  };
+  paintMode();
 
   const showErr = (msg, field) => {
     errBox.style.display = 'block';
@@ -1141,24 +1630,40 @@ function pageAuth(root, mode) {
 
   const doSubmit = async () => {
     errBox.style.display = 'none';
-    const account = fields.account.value.trim();
-    const password = fields.password.value;
-    if (!account) return showErr('请输入账号', 'account');
-    if (!password) return showErr('请输入密码', 'password');
-
-    if (isReg) {
-      if (password !== fields.confirm.value) return showErr('两次输入的密码不一致', 'confirm');
-      const localErr = validateLocal(account, password);
-      if (localErr) return showErr(localErr.msg, localErr.field);
-    }
-
     submitBtn.disabled = true;
-    submitBtn.textContent = isReg ? '注册中…' : '登录中…';
+    submitBtn.textContent = '处理中…';
     try {
-      const body = isReg
-        ? { account, password, nickname: fields.nickname.value.trim(), email: fields.email.value.trim() }
-        : { account, password };
-      const r = await api('/api/user/' + (isReg ? 'register' : 'login'), { method: 'POST', body });
+      let r;
+      if (isReg) {
+        const account = fields.account.value.trim();
+        const password = fields.password.value;
+        if (!account) throw Object.assign(new Error('请输入账号'), { data: { field: 'account' } });
+        if (!password) throw Object.assign(new Error('请输入密码'), { data: { field: 'password' } });
+        if (password !== fields.confirm.value) throw Object.assign(new Error('两次输入的密码不一致'), { data: { field: 'confirm' } });
+        const localErr = validateLocal(account, password);
+        if (localErr) throw Object.assign(new Error(localErr.msg), { data: { field: localErr.field } });
+        r = await api('/api/user/register', {
+          method: 'POST',
+          body: {
+            account, password,
+            nickname: fields.nickname.value.trim(),
+            email: fields.email.value.trim(),
+            emailCode: fields.emailCode ? fields.emailCode.value.trim() : '',
+          },
+        });
+      } else if (loginMode === 'email') {
+        const email = fields.email.value.trim();
+        const code = fields.emailCode.value.trim();
+        if (!email) throw Object.assign(new Error('请输入邮箱'), { data: { field: 'email' } });
+        if (!code) throw Object.assign(new Error('请输入邮箱验证码'), { data: { field: 'emailCode' } });
+        r = await api('/api/user/login/email', { method: 'POST', body: { email, code } });
+      } else {
+        const account = fields.account.value.trim();
+        const password = fields.password.value;
+        if (!account) throw Object.assign(new Error('请输入账号'), { data: { field: 'account' } });
+        if (!password) throw Object.assign(new Error('请输入密码'), { data: { field: 'password' } });
+        r = await api('/api/user/login', { method: 'POST', body: { account, password } });
+      }
       auth.loggedIn = true;
       auth.user = r.user;
       toast(isReg ? '注册成功，欢迎加入！' : '登录成功，欢迎回来', 'success');
@@ -1167,7 +1672,7 @@ function pageAuth(root, mode) {
     } catch (e) {
       showErr(e.message || '操作失败', e.data && e.data.field);
       submitBtn.disabled = false;
-      submitBtn.textContent = isReg ? '注册并登录' : '登 录';
+      submitBtn.textContent = isReg ? '注册并登录' : (loginMode === 'email' ? '邮箱登录' : '登 录');
     }
   };
 
@@ -1175,8 +1680,85 @@ function pageAuth(root, mode) {
   Object.values(fields).forEach((f) =>
     f.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSubmit(); })
   );
-  fields.account.focus();
+  if (fields.account) fields.account.focus();
   document.title = (isReg ? '注册' : '登录') + ' · ' + (state.site.siteName || '慈云影视');
+}
+
+/* ============================================================
+   找回密码
+   ============================================================ */
+function pageForgot(root) {
+  const fields = {};
+  const errBox = h('div', { class: 'err', style: { display: 'none' } });
+  const okBox = h('div', { class: 'ok-box', style: { display: 'none' } });
+
+  const mk = (key, { type = 'text', placeholder, icon }) => {
+    const input = h('input', { type, placeholder, name: key });
+    fields[key] = input;
+    return h('div', { class: 'input-wrap' }, [icon ? h('span', { class: 'ico', html: icon }) : null, input]);
+  };
+
+  const codeInput = h('input', { placeholder: '6 位验证码', maxlength: '6', inputmode: 'numeric' });
+  fields.code = codeInput;
+  const sendBtn = h('button', { class: 'btn btn-ghost btn-sm', text: '获取验证码', type: 'button' });
+  let timer = null;
+  sendBtn.onclick = async () => {
+    const email = fields.email.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErr('请输入正确的邮箱');
+    sendBtn.disabled = true; sendBtn.textContent = '发送中…';
+    try {
+      const r = await api('/api/mail/code', { method: 'POST', body: { email, scene: 'reset' } });
+      let left = 60;
+      const tick = () => {
+        if (left <= 0) { clearInterval(timer); sendBtn.disabled = false; sendBtn.textContent = '重新获取'; return; }
+        sendBtn.textContent = left + 's 后重发'; left -= 1;
+      };
+      tick(); timer = setInterval(tick, 1000);
+      if (r.devMode && r.devCode) { codeInput.value = r.devCode; toast('开发模式：验证码 ' + r.devCode, 'info'); }
+      else toast(r.message || '验证码已发送', 'success');
+    } catch (e) {
+      sendBtn.disabled = false; sendBtn.textContent = '获取验证码';
+      showErr(e.message || '发送失败');
+    }
+  };
+
+  const submitBtn = h('button', { class: 'btn btn-primary btn-block', text: '重置密码' });
+
+  const card = h('div', { class: 'auth-card' }, [
+    h('div', { class: 'auth-head' }, [
+      h('div', { class: 'mark', text: '慈' }),
+      h('h1', { text: '找回密码' }),
+      h('p', { text: '通过注册邮箱验证身份后重设密码' }),
+    ]),
+    errBox, okBox,
+    h('div', { class: 'field' }, [h('label', { text: '注册邮箱' }), mk('email', { placeholder: 'your@email.com', icon: mailIcon() })]),
+    h('div', { class: 'field' }, [h('label', { text: '邮箱验证码' }),
+      h('div', { class: 'input-wrap has-btn' }, [h('span', { class: 'ico', html: shieldIcon() }), codeInput, sendBtn])]),
+    h('div', { class: 'field' }, [h('label', { text: '新密码' }), mk('password', { type: 'password', placeholder: '至少 8 位，含字母和数字', icon: lockIcon() })]),
+    submitBtn,
+    h('div', { class: 'auth-foot' }, ['想起来了？', h('a', { href: '#/login', text: '返回登录' })]),
+  ]);
+  root.appendChild(h('div', { class: 'auth-page' }, [card]));
+
+  const showErr = (m) => { errBox.style.display = 'block'; errBox.textContent = '⚠ ' + m; okBox.style.display = 'none'; };
+
+  submitBtn.onclick = async () => {
+    errBox.style.display = 'none';
+    submitBtn.disabled = true; submitBtn.textContent = '提交中…';
+    try {
+      const r = await api('/api/user/reset-password', {
+        method: 'POST',
+        body: { email: fields.email.value.trim(), code: fields.code.value.trim(), password: fields.password.value },
+      });
+      okBox.style.display = 'block';
+      okBox.textContent = '✅ ' + (r.message || '密码已重置') + '，即将跳转登录…';
+      setTimeout(() => go('/login'), 1500);
+    } catch (e) {
+      showErr(e.message || '重置失败');
+      submitBtn.disabled = false; submitBtn.textContent = '重置密码';
+    }
+  };
+  document.title = '找回密码 · ' + (state.site.siteName || '慈云影视');
 }
 
 function validateLocal(account, password) {
@@ -1373,6 +1955,7 @@ function readAsDataURL(file) {
 function userIcon() { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>'; }
 function lockIcon() { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>'; }
 function mailIcon() { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>'; }
+function shieldIcon() { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v6c0 4.4-3 8.3-7 9-4-0.7-7-4.6-7-9V6z"/><path d="M9.5 12l1.8 1.8 3.2-3.6"/></svg>'; }
 function tagIcon() { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12l-8 8-9-9V4h7z"/><circle cx="7.5" cy="7.5" r="1.2"/></svg>'; }
 function eyeIcon(open) {
   return open

@@ -24,16 +24,28 @@ const sources = require('./lib/sources');
 const account = require('./lib/account');
 const chat = require('./lib/chat');
 const pay = require('./lib/pay');
+const security = require('./lib/security');
+const mail = require('./lib/mail');
 const { store, REDEEM_TYPES, FAMILY_ROLES, FAMILY_ROLE_NAME, FAMILY_ROLE_PERMS } = require('./lib/store');
 
 const app = express();
 const PORT = process.env.PORT || 8811;
 const HOST = process.env.HOST || '0.0.0.0';
 
+app.set('trust proxy', true); // 反向代理下取真实 IP（限流/锁定依赖）
+
+app.use(security.securityHeaders);
 app.use(compression());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+/** 取客户端真实 IP（兼容反代） */
+function clientIp(req) {
+  const xf = req.headers['x-forwarded-for'];
+  if (typeof xf === 'string' && xf) return xf.split(',')[0].trim();
+  return (req.socket && req.socket.remoteAddress) || 'unknown';
+}
 
 /* ------------------------- 访问日志 & 统计 ------------------------- */
 app.use((req, res, next) => {
@@ -90,7 +102,14 @@ app.get('/api/site', (req, res) => {
       guestComment: !!s.community.guestComment,
       commentReview: !!s.community.commentReview,
       needEmail: !!s.community.needEmail,
+      verifyEmail: !!s.community.verifyEmail,
+      emailLogin: s.community.emailLogin !== false,
       maxLen: s.community.maxLen || 500,
+    },
+    mail: {
+      // 仅暴露「是否可用」，绝不下发 SMTP 凭据
+      configured: !!(s.mail && s.mail.host && s.mail.user && s.mail.pass),
+      from: (s.mail && s.mail.from) || '',
     },
     family: {
       enabled: s.family.enabled !== false,
@@ -372,6 +391,11 @@ app.get('/api/stream', async (req, res) => {
   const m = /\/api\/stream\?url=(.+)$/.exec(url);
   if (m) url = decodeURIComponent(m[1]);
   if (!/^https?:\/\//i.test(url)) return res.status(400).send('invalid url');
+
+  // 🔒 SSRF 防护：解析真实 IP，拦截内网/保留地址，避免被用作内网探测跳板
+  const chk = await security.checkUpstream(url);
+  if (!chk.ok) return res.status(403).send('forbidden upstream: ' + chk.reason);
+
   try {
     await stream.proxyStream(url, req, res);
   } catch (e) {
@@ -440,9 +464,20 @@ app.get('/api/live/:channel', async (req, res) => {
   try {
     const live = await cctv.getLive(req.params.channel);
     const ch = store.liveChannels.find((c) => c.id === req.params.channel);
+    let now = live.now || null;
+    // 节目单缺失时兜底：单独再取一次当前频道实时节目
+    if (!now) {
+      try {
+        const cur = await cctv.getNowEpg([req.params.channel], { skipCache: true });
+        now = (cur && cur[0]) || null;
+      } catch { /* 忽略 */ }
+    }
     res.json({
       ...live,
+      now,                                  // 前端直接读取：正在播节目 + 进度
+      epgNow: now,                          // 兼容别名
       name: ch ? ch.name : req.params.channel,
+      logo: ch ? ch.logo : '',
       src: live.hls ? `/api/stream?url=${encodeURIComponent(live.hls)}` : '',
       flvSrc: live.flv ? `/api/stream?url=${encodeURIComponent(live.flv)}` : '',
     });
@@ -610,15 +645,47 @@ function requireAdmin(req, res, next) {
 }
 
 app.post('/api/admin/login', (req, res) => {
+  const ip = clientIp(req);
+  // ① 总入口限流：同 IP 每分钟最多 12 次尝试
+  const rl = security.rateLimit('admin-login:' + ip, { window: 60 * 1000, max: 12 });
+  if (!rl.ok) {
+    res.setHeader('Retry-After', String(rl.retryAfter));
+    return res.status(429).json({ error: `尝试过于频繁，请 ${rl.retryAfter} 秒后再试` });
+  }
+  // ② 暴力破解锁定（渐进式：5 次后 30s，逐级到 1800s）
+  const guard = security.loginGuard(ip);
+  if (!guard.ok) {
+    res.setHeader('Retry-After', String(guard.retryAfter));
+    return res.status(429).json({ error: `失败次数过多，账号已临时锁定，请 ${guard.retryAfter} 秒后再试` });
+  }
+
   const { username, password } = req.body || {};
   const s = store.settings;
   const expectUser = s.adminUsername || 'admin';
-  const expectPass = s.adminPassword || 'admin888';
-  if (username !== expectUser || password !== expectPass) {
-    return res.status(401).json({ error: '账号或密码错误' });
+  // ③ 口令校验：支持已哈希与历史明文，校验通过后自动升级为哈希
+  const stored = s.adminPassword || 'admin888';
+  const uOk = String(username || '') === expectUser;
+  const pv = security.verifyAdminPassword(password, stored);
+  if (!uOk || !pv.ok) {
+    const { count, lockSec } = security.loginFail(ip);
+    const left = Math.max(0, 5 - count);
+    return res.status(401).json({
+      error: lockSec
+        ? `账号或密码错误，已锁定 ${lockSec} 秒`
+        : `账号或密码错误${count >= 2 ? `（剩余尝试 ${left} 次）` : ''}`,
+    });
   }
-  const token = crypto.randomBytes(24).toString('hex');
-  store.setSession(token, { role: 'admin', user: username });
+  security.loginOk(ip);
+
+  // 历史明文口令 → 升级为 PBKDF2 哈希落库
+  if (pv.legacy) {
+    try {
+      store.setSettings({ adminPassword: security.hashAdminPassword(password) });
+    } catch (e) { /* 忽略，不影响登录 */ }
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  store.setSession(token, { role: 'admin', user: username, ip, at: Date.now() });
   // 同步一个同名用户端账号，让管理员在用户端也享有终身会员与无限额度
   try {
     if ((store.settings.monetize || {}).adminUnlimited !== false) {
@@ -640,7 +707,12 @@ app.post('/api/admin/login', (req, res) => {
       }
     }
   } catch (e) { /* 忽略，不影响后台登录 */ }
-  res.cookie('cy_token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 86400000 });
+  res.cookie('cy_token', token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: req.headers['x-forwarded-proto'] === 'https' || req.secure,
+    maxAge: 7 * 86400000,
+  });
   res.json({ ok: true, token });
 });
 
@@ -670,11 +742,48 @@ app.get('/api/admin/me', (req, res) => {
 });
 
 /** 站点设置读写 */
+/** 对管理设置做安全脱敏：口令不下发，邮箱授权码打码 */
+function safeSettingsView(s) {
+  const out = JSON.parse(JSON.stringify(s));
+  if (out.adminPassword) {
+    out.adminPassword = '';           // 绝不回传口令（明文或哈希都不回传）
+    out.adminPasswordSet = true;      // 只告知「已设置」
+  }
+  if (out.mail && out.mail.pass) {
+    out.mail = { ...out.mail, pass: '', passSet: true };
+  }
+  return out;
+}
+
 app.get('/api/admin/settings', requireAdmin, (req, res) => {
-  res.json(store.settings);
+  res.json(safeSettingsView(store.settings));
 });
 app.put('/api/admin/settings', requireAdmin, (req, res) => {
-  res.json(store.setSettings(req.body || {}));
+  const patch = { ...(req.body || {}) };
+
+  // 🔒 管理口令：非空才更新，且必须通过强度校验，落库前哈希
+  if (patch.adminPassword !== undefined) {
+    const pwd = String(patch.adminPassword || '');
+    const changedUser = patch.adminUsername && patch.adminUsername !== (store.settings.adminUsername || 'admin');
+    if (pwd === '') {
+      delete patch.adminPassword;      // 空 = 不改
+    } else {
+      const err = security.checkAdminPassword(pwd);
+      if (err) return res.status(400).json({ error: '口令强度不足：' + err });
+      patch.adminPassword = security.hashAdminPassword(pwd);
+      // 改口令后吊销所有后台会话，强制重新登录
+      store.revokeAllSessions && store.revokeAllSessions();
+    }
+    if (changedUser && pwd === '') {
+      return res.status(400).json({ error: '修改管理员账号时必须同时设置新口令' });
+    }
+  }
+  // 邮箱授权码：空表示不改
+  if (patch.mail && 'pass' in patch.mail && !patch.mail.pass) {
+    delete patch.mail.pass;
+  }
+  const saved = store.setSettings(patch);
+  res.json(safeSettingsView(saved));
 });
 app.post('/api/admin/settings/reset', requireAdmin, (req, res) => {
   store.setSettings(store.settingsDefaults);
@@ -876,6 +985,13 @@ app.post('/api/user/register', (req, res) => {
   if (c.enabled === false || c.allowRegister === false) {
     return res.status(403).json({ error: '本站暂未开放注册' });
   }
+  // 🔒 注册限流：同 IP 每小时最多 6 个账号，防批量注册
+  const ip = clientIp(req);
+  const rl = security.rateLimit('register:' + ip, { window: 60 * 60 * 1000, max: 6 });
+  if (!rl.ok) {
+    res.setHeader('Retry-After', String(rl.retryAfter));
+    return res.status(429).json({ error: `注册过于频繁，请 ${Math.ceil(rl.retryAfter / 60)} 分钟后再试` });
+  }
   const { account: acc, password, nickname, email } = req.body || {};
 
   const eAcc = account.checkAccount(acc);
@@ -887,6 +1003,13 @@ app.post('/api/user/register', (req, res) => {
   const eMail = account.checkEmail(email);
   if (eMail) return res.status(400).json({ error: eMail, field: 'email' });
   if (c.needEmail && !email) return res.status(400).json({ error: '本站要求填写邮箱', field: 'email' });
+
+  // 🔒 开启邮箱验证时，必须携带有效验证码
+  if (c.verifyEmail) {
+    const code = String((req.body || {}).emailCode || '').trim();
+    const chk = mail.checkCode(email, code, 'register');
+    if (!chk.ok) return res.status(400).json({ error: chk.error, field: 'emailCode' });
+  }
 
   const key = String(acc).trim().toLowerCase();
   if (store.findUser(key)) return res.status(409).json({ error: '该账号已被注册', field: 'account' });
@@ -911,22 +1034,48 @@ app.post('/api/user/register', (req, res) => {
   user.tokens = [token];
   store.upsertUser(user);
   store.setSession(token, { role: 'user', account: key });
-  res.cookie('cy_user', token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 86400000 });
+  res.cookie('cy_user', token, {
+    httpOnly: true, sameSite: 'lax',
+    secure: req.headers['x-forwarded-proto'] === 'https' || req.secure,
+    maxAge: 30 * 86400000,
+  });
   res.json({ ok: true, token, user: publicUser(user) });
 });
 
 /** 登录 */
 app.post('/api/user/login', (req, res) => {
+  const ip = clientIp(req);
+  // 🔒 登录限流 + 渐进锁定，防撞库
+  const rl = security.rateLimit('user-login:' + ip, { window: 60 * 1000, max: 15 });
+  if (!rl.ok) {
+    res.setHeader('Retry-After', String(rl.retryAfter));
+    return res.status(429).json({ error: `尝试过于频繁，请 ${rl.retryAfter} 秒后再试` });
+  }
+  const guard = security.loginGuard(ip);
+  if (!guard.ok) {
+    res.setHeader('Retry-After', String(guard.retryAfter));
+    return res.status(429).json({ error: `失败次数过多，请 ${guard.retryAfter} 秒后再试` });
+  }
+
   const { account: acc, password, remember } = req.body || {};
   const key = String(acc || '').trim().toLowerCase();
   if (!key || !password) return res.status(400).json({ error: '请输入账号和密码' });
 
   const u = store.findUser(key);
-  if (!u) return res.status(401).json({ error: '账号不存在' });
+  // 🔒 统一错误文案，避免账号枚举
+  const genericErr = '账号或密码错误';
+  if (!u) {
+    const { count, lockSec } = security.loginFail(ip);
+    return res.status(401).json({ error: lockSec ? `失败次数过多，已锁定 ${lockSec} 秒` : genericErr });
+  }
   if (u.status === 'banned') return res.status(403).json({ error: '该账号已被封禁' });
 
   const v = account.verifyPassword(password, u.password);
-  if (!v.ok) return res.status(401).json({ error: '密码错误' });
+  if (!v.ok) {
+    const { count, lockSec } = security.loginFail(ip);
+    return res.status(401).json({ error: lockSec ? `失败次数过多，已锁定 ${lockSec} 秒` : genericErr });
+  }
+  security.loginOk(ip);
   if (v.needsUpgrade) {
     u.password = account.hashPassword(password);
   }
@@ -938,7 +1087,11 @@ app.post('/api/user/login', (req, res) => {
   store.setSession(token, { role: 'user', account: key });
 
   const maxAge = remember === false ? undefined : 30 * 86400000;
-  res.cookie('cy_user', token, { httpOnly: true, sameSite: 'lax', maxAge });
+  res.cookie('cy_user', token, {
+    httpOnly: true, sameSite: 'lax',
+    secure: req.headers['x-forwarded-proto'] === 'https' || req.secure,
+    maxAge,
+  });
   res.json({ ok: true, token, user: publicUser(u) });
 });
 
@@ -955,6 +1108,149 @@ app.post('/api/user/logout', (req, res) => {
   }
   res.clearCookie('cy_user');
   res.json({ ok: true });
+});
+
+/* ============================================================
+ * API：邮箱验证码 / 邮箱登录 / 找回密码
+ * ============================================================ */
+
+/** 发信配置是否就绪（决定是否走「开发模式」直接回显验证码） */
+function mailCfg() {
+  return (store.settings && store.settings.mail) || {};
+}
+
+/** 是否开启了邮箱验证相关能力 */
+app.get('/api/mail/status', (req, res) => {
+  const m = mailCfg();
+  res.json({
+    configured: !!(m.host && m.user && m.pass),
+    from: m.from || m.user || '',
+    scenes: mail.SCENE_NAME,
+  });
+});
+
+/** 发送验证码 */
+app.post('/api/mail/code', async (req, res) => {
+  const ip = clientIp(req);
+  // 🔒 发信限流：同 IP 每小时最多 10 次
+  const rl = security.rateLimit('mail-code:' + ip, { window: 60 * 60 * 1000, max: 10 });
+  if (!rl.ok) {
+    res.setHeader('Retry-After', String(rl.retryAfter));
+    return res.status(429).json({ error: '发送过于频繁，请稍后再试' });
+  }
+  const { email, scene } = req.body || {};
+  const sc = ['register', 'login', 'reset', 'bind'].includes(scene) ? scene : 'register';
+  const to = String(email || '').trim().toLowerCase();
+
+  // 场景预检：注册场景邮箱不能已被占用；登录/重置场景邮箱必须存在
+  if (sc === 'register' && store.findUserByEmail(to)) {
+    return res.status(409).json({ error: '该邮箱已被使用', field: 'email' });
+  }
+  if ((sc === 'login' || sc === 'reset') && !store.findUserByEmail(to)) {
+    // 不暴露邮箱是否存在 → 仍返回成功，但实际不发（防枚举）
+    return res.json({ ok: true, scene: sc, message: '若该邮箱已注册，验证码将发送至你的邮箱' });
+  }
+
+  const r = await mail.sendCode(mailCfg(), to, sc);
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  const out = { ok: true, scene: sc, message: '验证码已发送，请查收邮箱（5 分钟内有效）' };
+  // 未配置 SMTP → 开发模式回显验证码，便于本地体验
+  if (r.devMode) {
+    out.devMode = true;
+    out.devCode = r.devCode;
+    out.message = '未配置 SMTP 服务，已启用开发模式';
+  }
+  res.json(out);
+});
+
+/** 邮箱验证码登录（免密码） */
+app.post('/api/user/login/email', (req, res) => {
+  const ip = clientIp(req);
+  const rl = security.rateLimit('mail-login:' + ip, { window: 60 * 1000, max: 10 });
+  if (!rl.ok) {
+    res.setHeader('Retry-After', String(rl.retryAfter));
+    return res.status(429).json({ error: `尝试过于频繁，请 ${rl.retryAfter} 秒后再试` });
+  }
+  const { email, code, remember } = req.body || {};
+  const to = String(email || '').trim().toLowerCase();
+  const u = store.findUserByEmail(to);
+  if (!u) return res.status(401).json({ error: '邮箱或验证码错误' });
+  if (u.status === 'banned') return res.status(403).json({ error: '该账号已被封禁' });
+
+  const chk = mail.checkCode(to, code, 'login');
+  if (!chk.ok) return res.status(401).json({ error: chk.error });
+
+  const token = account.newToken();
+  u.tokens = [...(u.tokens || []).slice(-4), token];
+  u.lastLogin = Date.now();
+  store.upsertUser(u);
+  store.setSession(token, { role: 'user', account: u.account });
+  const maxAge = remember === false ? undefined : 30 * 86400000;
+  res.cookie('cy_user', token, {
+    httpOnly: true, sameSite: 'lax',
+    secure: req.headers['x-forwarded-proto'] === 'https' || req.secure,
+    maxAge,
+  });
+  res.json({ ok: true, token, user: publicUser(u) });
+});
+
+/** 找回密码：邮箱验证码 + 新密码 */
+app.post('/api/user/reset-password', (req, res) => {
+  const ip = clientIp(req);
+  const rl = security.rateLimit('reset-pwd:' + ip, { window: 60 * 60 * 1000, max: 8 });
+  if (!rl.ok) {
+    res.setHeader('Retry-After', String(rl.retryAfter));
+    return res.status(429).json({ error: '操作过于频繁，请稍后再试' });
+  }
+  const { email, code, password } = req.body || {};
+  const to = String(email || '').trim().toLowerCase();
+  const u = store.findUserByEmail(to);
+  if (!u) return res.status(400).json({ error: '邮箱未注册' });
+
+  const ePwd = account.checkPassword(password);
+  if (ePwd) return res.status(400).json({ error: ePwd, field: 'password' });
+
+  const chk = mail.checkCode(to, code, 'reset');
+  if (!chk.ok) return res.status(400).json({ error: chk.error });
+
+  u.password = account.hashPassword(password);
+  u.tokens = [];                 // 吊销全部旧登录
+  store.upsertUser(u);
+  res.json({ ok: true, message: '密码已重置，请使用新密码登录' });
+});
+
+/** 发送绑定邮箱验证码（需登录） */
+app.post('/api/user/email/bind-code', async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const ip = clientIp(req);
+  const rl = security.rateLimit('bind-code:' + ip, { window: 60 * 60 * 1000, max: 10 });
+  if (!rl.ok) return res.status(429).json({ error: '发送过于频繁，请稍后再试' });
+
+  const email = String((req.body || {}).email || '').trim().toLowerCase();
+  const e = account.checkEmail(email);
+  if (e) return res.status(400).json({ error: e, field: 'email' });
+  if (store.findUserByEmail(email)) return res.status(409).json({ error: '该邮箱已被使用', field: 'email' });
+
+  const r = await mail.sendCode(mailCfg(), email, 'bind');
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  const out = { ok: true, message: '验证码已发送' };
+  if (r.devMode) { out.devMode = true; out.devCode = r.devCode; }
+  res.json(out);
+});
+
+/** 确认绑定邮箱（需登录） */
+app.post('/api/user/email/bind', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const { email, code } = req.body || {};
+  const to = String(email || '').trim().toLowerCase();
+  const chk = mail.checkCode(to, code, 'bind');
+  if (!chk.ok) return res.status(400).json({ error: chk.error });
+  if (store.findUserByEmail(to)) return res.status(409).json({ error: '该邮箱已被使用' });
+  u.email = to;
+  store.upsertUser(u);
+  res.json({ ok: true, user: publicUser(u) });
 });
 
 /** 当前登录状态 */
@@ -1156,6 +1452,56 @@ app.get('/api/admin/users', requireAdmin, (req, res) => {
     comments: store.getComments().filter((c) => c.account === u.account && c.status !== 'deleted').length,
   }));
   res.json({ users });
+});
+
+/**
+ * 后台创建用户账号（不需要邮箱）
+ * POST /api/admin/users
+ * body: { account, password, nickname?, email?, vip?, days?, unlimited? }
+ *
+ * 用途：管理员直接开号，绕过邮箱验证码流程，适合批量发号 / 内部测试。
+ */
+app.post('/api/admin/users', requireAdmin, (req, res) => {
+  const { account: acct, password, nickname = '', email = '', vip = '', days = 0, unlimited = false } = req.body || {};
+  const a = String(acct || '').trim();
+  const p = String(password || '');
+  if (!/^[A-Za-z0-9_@.\-]{3,32}$/.test(a)) {
+    return res.status(400).json({ error: '账号需 3-32 位，仅限字母/数字/下划线/点/横线/@' });
+  }
+  const pe = account.checkPassword(p);
+  if (pe) return res.status(400).json({ error: '密码强度不足：' + pe });
+  if (store.findUser(a)) return res.status(409).json({ error: '该账号已存在' });
+  if (email && store.findUserByEmail(email)) return res.status(409).json({ error: '该邮箱已被占用' });
+
+  const now = Date.now();
+  let vipUntil = 0;
+  if (unlimited) vipUntil = 0;
+  else if (vip) {
+    const d = Math.max(0, parseInt(days, 10) || 0);
+    if (d > 0) {
+      const base = { day: 86400000, month: 30 * 86400000, quarter: 90 * 86400000, year: 365 * 86400000 }[vip];
+      const plan = store.findPlan && store.findPlan(vip);
+      const dur = plan && plan.days ? plan.days * 86400000 : (base || 30 * 86400000);
+      vipUntil = now + dur;
+    }
+  }
+
+  const user = {
+    account: a,
+    nickname: nickname || a,
+    email: String(email || '').trim(),
+    password: account.hashPassword(p),
+    vip: vip || '',
+    vipUntil,
+    unlimited: !!unlimited,
+    role: 'user',
+    status: 'active',
+    tokens: [],
+    createdAt: now,
+    lastLogin: 0,
+  };
+  store.upsertUser(user);
+  res.json({ ok: true, user: { account: a, nickname: user.nickname, email: user.email, vip: user.vip, vipUntil, unlimited: !!unlimited } });
 });
 
 app.put('/api/admin/users/:account', requireAdmin, (req, res) => {
@@ -2886,6 +3232,422 @@ app.post('/api/danmaku', (req, res) => {
 app.get('/api/admin/danmaku/rooms', requireAdmin, (req, res) => {
   const rooms = chat.roomStats().filter((r) => r.id.startsWith('danmaku:'));
   res.json({ rooms });
+});
+
+/* ============================================================
+ * 短视频（用户发布 · 抖音式）
+ * ============================================================
+ * 上传安全：七层纵深防御（详见 lib/upload.js）
+ *   L1 体积限制 → L2 扩展名白名单 → L3 文件名消毒 → L4 魔数校验
+ *   → L5 容器结构校验 → L6 ffprobe 真实探测 → L7 隔离存储
+ */
+
+/** 登录态中间件（普通用户）：未登录返回 401 */
+function requireUser(req, res, next) {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  req.user = u;
+  next();
+}
+
+/** 短视频视图（脱敏 + 补齐字段） */
+function shortView(s, viewer) {
+  return {
+    id: s.id,
+    account: s.account,
+    author: s.author || s.account,
+    authorAvatar: s.authorAvatar || '',
+    title: s.title || '',
+    desc: s.desc || '',
+    cover: s.cover || '',
+    tags: s.tags || [],
+    duration: s.duration || 0,
+    width: s.width || 0,
+    height: s.height || 0,
+    size: s.size || 0,
+    views: s.views || 0,
+    likes: (s.likes || []).length,
+    liked: viewer ? (s.likes || []).includes(viewer) : false,
+    comments: store.getComments().filter((c) => c.targetId === 'short:' + s.id && c.status !== 'deleted').length,
+    status: s.status || 'pending',
+    createdAt: s.createdAt,
+    // 播放地址（走统一代理，支持 Range）
+    src: `/api/shorts/${s.id}/video`,
+  };
+}
+
+/**
+ * 上传短视频
+ * POST /api/shorts/upload  (multipart/form-data)
+ * fields: video(文件), title, desc, tags, cover
+ *
+ * 安全说明：全程流式落盘到临时目录 → 七层校验 → 校验通过才移入正式目录。
+ */
+app.post(
+  '/api/shorts/upload',
+  requireUser,
+  (req, res, next) => {
+    // 独立限流：每用户每小时最多 20 次上传
+    const rl = security.rateLimit('upload:' + (req.user && req.user.account), { window: 3600 * 1000, max: 20 });
+    if (!rl.ok) return res.status(429).json({ error: '上传过于频繁，请稍后再试', retryAfter: rl.retryAfter });
+    next();
+  },
+  async (req, res) => {
+    const upload = require('./lib/upload');
+    await upload.ensureDirs();
+
+    const ct = String(req.headers['content-type'] || '');
+    if (!ct.includes('multipart/form-data')) {
+      return res.status(400).json({ error: '请使用 multipart/form-data 上传' });
+    }
+    const boundary = '--' + ct.split('boundary=')[1];
+    if (!boundary || boundary === '--undefined') return res.status(400).json({ error: '缺少 multipart boundary' });
+
+    let tmpPath = null;
+    try {
+      const r = await receiveMultipart(req, upload, boundary);
+      tmpPath = r.tmpPath;
+
+      // 字段校验
+      const title = String(r.fields.title || '').trim().slice(0, 80);
+      const desc = String(r.fields.desc || '').trim().slice(0, 500);
+      const tags = String(r.fields.tags || '')
+        .split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean).slice(0, 8);
+      if (!title) throw new UploadError('请填写视频标题');
+      if (!r.file) throw new UploadError('未收到视频文件');
+
+      // —— 七层安全校验 ——
+      const v = await upload.validateUpload({
+        path: tmpPath,
+        size: r.file.size,
+        originalname: r.file.filename,
+        mimetype: r.file.contentType,
+      });
+      if (!v.ok) throw new UploadError(v.reason || '文件校验未通过');
+
+      // 落盘（隔离存储 + 随机文件名）
+      const ext = upload.extOf(r.file.filename) || 'mp4';
+      const c = await upload.commitFile(tmpPath, ext);
+      if (!c.ok) throw new UploadError(c.reason || '保存失败');
+      tmpPath = null; // 已移走，勿再删
+
+      const info = v.info || {};
+      const id = 'sh_' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
+      const autoPublish = store.settings.community && store.settings.community.shortAutoPublish !== false;
+      const item = {
+        id,
+        account: req.user.account,
+        author: req.user.nickname || req.user.account,
+        authorAvatar: req.user.avatar || '',
+        title, desc, tags,
+        cover: String(r.fields.cover || '').slice(0, 500),
+        file: c.filename,
+        duration: info.duration || 0,
+        width: info.width || 0,
+        height: info.height || 0,
+        size: info.size || r.file.size,
+        videoCodec: info.videoCodec || '',
+        audioCodec: info.audioCodec || '',
+        views: 0,
+        likes: [],
+        status: autoPublish ? 'published' : 'pending',
+        createdAt: Date.now(),
+      };
+      store.upsertShort(item);
+      res.json({ ok: true, short: shortView(item, req.user.account), pending: !autoPublish });
+    } catch (e) {
+      if (tmpPath) await upload.removeQuiet(tmpPath);
+      const code = e instanceof UploadError ? 400 : 500;
+      res.status(code).json({ error: e.message || '上传失败' });
+    }
+  }
+);
+
+class UploadError extends Error {}
+
+/**
+ * 极简 multipart/form-data 解析（零依赖）。
+ * 安全要点：
+ *   · 边收边写盘，累计超 MAX_SIZE 立即 413，防内存/磁盘 DoS
+ *   · 只保存第一个文件的字节流到随机临时名
+ *   · 表单字段限长，防止超长字段撑爆内存
+ */
+function receiveMultipart(req, upload, boundary) {
+  return new Promise((resolve, reject) => {
+    const bufBoundary = Buffer.from(boundary);
+    let buf = Buffer.alloc(0);
+    const fields = {};
+    let file = null;
+    let tmpPath = null;
+    let ws = null;
+    let written = 0;
+    let state = 'preamble'; // preamble | headers | body
+    let curName = '';
+    let curFilename = '';
+    let curCT = '';
+    let done = false;
+
+    const finish = async () => {
+      if (done) return;
+      done = true;
+      if (ws) await new Promise((r) => ws.end(r));
+      resolve({ fields, file, tmpPath });
+    };
+
+    const fail = async (err) => {
+      if (done) return;
+      done = true;
+      try { if (ws) ws.destroy(); } catch {}
+      if (tmpPath) await upload.removeQuiet(tmpPath);
+      reject(err);
+    };
+
+    req.on('data', (chunk) => {
+      if (done) return;
+      buf = Buffer.concat([buf, chunk]);
+
+      // 超限保护（整体请求）
+      if (buf.length > upload.MAX_SIZE + 8 * 1024 * 1024) {
+        return fail(new UploadError(`文件超过上限 ${(upload.MAX_SIZE / 1048576).toFixed(0)}MB`));
+      }
+
+      // 循环解析
+      for (;;) {
+        if (state === 'preamble') {
+          const i = buf.indexOf(bufBoundary);
+          if (i < 0) { if (buf.length > bufBoundary.length) buf = buf.slice(-bufBoundary.length); return; }
+          buf = buf.slice(i + bufBoundary.length);
+          if (buf.slice(0, 2).toString() === '--') return finish();
+          if (buf.slice(0, 2).toString() === '\r\n') buf = buf.slice(2);
+          state = 'headers';
+          continue;
+        }
+        if (state === 'headers') {
+          const i = buf.indexOf('\r\n\r\n');
+          if (i < 0) { if (buf.length > 64 * 1024) return fail(new UploadError('表单头异常')); return; }
+          const head = buf.slice(0, i).toString('utf8');
+          buf = buf.slice(i + 4);
+          const nm = /name="([^"]*)"/i.exec(head);
+          const fn = /filename="([^"]*)"/i.exec(head);
+          const ct2 = /Content-Type:\s*([^\r\n]+)/i.exec(head);
+          curName = nm ? nm[1] : '';
+          curFilename = fn ? fn[1] : '';
+          curCT = ct2 ? ct2[1].trim() : '';
+          if (curFilename) {
+            if (file) { return fail(new UploadError('一次只能上传一个视频文件')); }
+            file = { filename: curFilename, contentType: curCT, size: 0 };
+            tmpPath = path.join(upload.TMP_DIR, 'up_' + crypto.randomBytes(10).toString('hex') + '.part');
+            ws = fs.createWriteStream(tmpPath);
+            ws.on('error', (e) => fail(new UploadError('写入临时文件失败：' + e.message.slice(0, 80))));
+            written = 0;
+          }
+          state = 'body';
+          continue;
+        }
+        if (state === 'body') {
+          const i = buf.indexOf(bufBoundary);
+          if (i < 0) {
+            // 保守：留出 boundary 长度 + 4 防跨块
+            const safe = Math.max(0, buf.length - bufBoundary.length - 4);
+            if (safe > 0) {
+              const piece = buf.slice(0, safe);
+              if (ws) { written += piece.length; if (written > upload.MAX_SIZE) return fail(new UploadError(`文件超过上限 ${(upload.MAX_SIZE / 1048576).toFixed(0)}MB`)); ws.write(piece); }
+              else if (Object.keys(fields).length === 0 || curName) {
+                fields[curName] = (fields[curName] || '') + piece.toString('utf8');
+                if (fields[curName].length > 100000) return fail(new UploadError('表单字段过长'));
+              }
+              buf = buf.slice(safe);
+            }
+            return;
+          }
+          const piece = buf.slice(0, i);
+          // 去掉尾部 CRLF
+          const clean = piece.length >= 2 && piece.slice(-2).toString() === '\r\n' ? piece.slice(0, -2) : piece;
+          if (ws) { written += clean.length; if (written > upload.MAX_SIZE) return fail(new UploadError(`文件超过上限 ${(upload.MAX_SIZE / 1048576).toFixed(0)}MB`)); ws.write(clean); }
+          else {
+            fields[curName] = (fields[curName] || '') + clean.toString('utf8');
+            if (fields[curName].length > 100000) return fail(new UploadError('表单字段过长'));
+          }
+          buf = buf.slice(i + bufBoundary.length);
+          if (ws) {
+            file.size = written;
+            ws.end();
+            ws = null;
+          }
+          if (buf.slice(0, 2).toString() === '--') return finish();
+          if (buf.slice(0, 2).toString() === '\r\n') buf = buf.slice(2);
+          state = 'headers';
+          continue;
+        }
+        return;
+      }
+    });
+    req.on('end', () => { if (!done) finish(); });
+    req.on('error', (e) => fail(e));
+  });
+}
+
+/** 视频播放（支持 Range，鉴权后放行；仅限已发布或作者本人/管理员） */
+app.get('/api/shorts/:id/video', async (req, res) => {
+  const upload = require('./lib/upload');
+  const s = store.findShort(req.params.id);
+  if (!s) return res.status(404).send('not found');
+  const me = currentUser(req);
+  const isOwner = me && me.account === s.account;
+  const isAdminReq = !!(req.admin);
+  if ((s.status || 'pending') !== 'published' && !isOwner && !isAdminReq) {
+    return res.status(403).send('forbidden');
+  }
+  const full = upload.resolveStored(s.file);
+  if (!full) return res.status(404).send('bad file');
+  let st;
+  try { st = fs.statSync(full); } catch { return res.status(404).send('missing'); }
+
+  // 防盗链 + 不可执行
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+
+  const range = req.headers.range;
+  if (range) {
+    const m = /bytes=(\d*)-(\d*)/.exec(range);
+    let start = m && m[1] ? parseInt(m[1], 10) : 0;
+    let end = m && m[2] ? parseInt(m[2], 10) : st.size - 1;
+    if (isNaN(start) || start < 0) start = 0;
+    if (isNaN(end) || end >= st.size) end = st.size - 1;
+    if (start > end) return res.status(416).setHeader('Content-Range', `bytes */${st.size}`).end();
+    res.statusCode = 206;
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${st.size}`);
+    res.setHeader('Content-Length', end - start + 1);
+    fs.createReadStream(full, { start, end }).pipe(res);
+  } else {
+    res.setHeader('Content-Length', st.size);
+    fs.createReadStream(full).pipe(res);
+  }
+});
+
+/** 短视频信息流（分页 + 排序） */
+app.get('/api/shorts', (req, res) => {
+  const { sort = 'new', page = 1, size = 12, account = '', keyword = '' } = req.query;
+  const me = currentUser(req);
+  const canAdmin = !!req.admin;
+  let list = store.getShorts({ account, keyword }).filter(
+    (s) => (s.status || 'pending') === 'published' || (me && me.account === s.account) || canAdmin
+  );
+  if (sort === 'hot') list = list.slice().sort((a, b) => (b.views || 0) - (a.views || 0));
+  else if (sort === 'like') list = list.slice().sort((a, b) => (b.likes || []).length - (a.likes || []).length);
+  else list = list.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  const p = Math.max(1, parseInt(page, 10) || 1);
+  const sz = Math.min(50, Math.max(1, parseInt(size, 10) || 12));
+  const total = list.length;
+  const items = list.slice((p - 1) * sz, p * sz).map((s) => shortView(s, me && me.account));
+  res.json({ list: items, total, page: p, size: sz, hasMore: p * sz < total });
+});
+
+/** 单个短视频详情 */
+app.get('/api/shorts/:id', (req, res) => {
+  const s = store.findShort(req.params.id);
+  if (!s) return res.status(404).json({ error: 'not found' });
+  const me = currentUser(req);
+  if ((s.status || 'pending') !== 'published' && !(me && me.account === s.account) && !req.admin) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  store.bumpShortView(s.id);
+  res.json({ short: shortView(store.findShort(s.id), me && me.account) });
+});
+
+/** 点赞 / 取消点赞 */
+app.post('/api/shorts/:id/like', requireUser, (req, res) => {
+  const r = store.toggleShortLike(req.params.id, req.user.account);
+  if (!r) return res.status(404).json({ error: 'not found' });
+  res.json(r);
+});
+
+/** 删除自己的视频（管理员可删任意） */
+app.delete('/api/shorts/:id', requireUser, (req, res) => {
+  const s = store.findShort(req.params.id);
+  if (!s) return res.status(404).json({ error: 'not found' });
+  const isOwner = s.account === req.user.account;
+  if (!isOwner && !req.admin) return res.status(403).json({ error: '无权删除' });
+  const upload = require('./lib/upload');
+  const full = upload.resolveStored(s.file);
+  if (full) upload.removeQuiet(full);
+  store.deleteShort(req.params.id);
+  res.json({ ok: true });
+});
+
+/* ---------- 后台：短视频审核 ---------- */
+app.get('/api/admin/shorts', requireAdmin, (req, res) => {
+  const { status = '', keyword = '', page = 1, size = 20 } = req.query;
+  let list = store.getShorts({ status: status || undefined, keyword });
+  list = list.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const p = Math.max(1, parseInt(page, 10) || 1);
+  const sz = Math.min(100, Math.max(1, parseInt(size, 10) || 20));
+  const total = list.length;
+  res.json({
+    total, page: p, size: sz,
+    list: list.slice((p - 1) * sz, p * sz).map((s) => shortView(s, null)),
+  });
+});
+
+app.put('/api/admin/shorts/:id', requireAdmin, (req, res) => {
+  const s = store.findShort(req.params.id);
+  if (!s) return res.status(404).json({ error: 'not found' });
+  const { status, title } = req.body || {};
+  if (status && ['published', 'pending', 'rejected'].includes(status)) s.status = status;
+  if (title !== undefined) s.title = String(title).slice(0, 80);
+  store.upsertShort(s);
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/shorts/:id', requireAdmin, (req, res) => {
+  const s = store.findShort(req.params.id);
+  if (!s) return res.status(404).json({ error: 'not found' });
+  const upload = require('./lib/upload');
+  const full = upload.resolveStored(s.file);
+  if (full) upload.removeQuiet(full);
+  store.deleteShort(req.params.id);
+  res.json({ ok: true });
+});
+
+/* ============================================================
+ * 追剧（收藏订阅 + 更新追踪）
+ * ============================================================ */
+/** 我的追剧列表 */
+app.get('/api/follows', requireUser, (req, res) => {
+  res.json({ list: store.getFollows(req.user.account) });
+});
+
+/** 是否已追（单项查询） */
+app.get('/api/follows/check', requireUser, (req, res) => {
+  const { type, targetId } = req.query;
+  const f = store.findFollow(req.user.account, type, targetId);
+  res.json({ following: !!f, item: f || null });
+});
+
+/** 追 / 取关 */
+app.post('/api/follows/toggle', requireUser, (req, res) => {
+  const { type, targetId, title = '', cover = '', note = '', lastEp = '' } = req.body || {};
+  if (!type || !targetId) return res.status(400).json({ error: '缺少参数' });
+  const r = store.toggleFollow(req.user.account, {
+    type: String(type).slice(0, 20),
+    targetId: String(targetId).slice(0, 80),
+    title: String(title).slice(0, 100),
+    cover: String(cover).slice(0, 500),
+    note: String(note).slice(0, 200),
+    lastEp: String(lastEp).slice(0, 40),
+  });
+  res.json(r);
+});
+
+/** 更新追剧进度 */
+app.post('/api/follows/progress', requireUser, (req, res) => {
+  const { type, targetId, lastEp = '' } = req.body || {};
+  const f = store.touchFollow(req.user.account, type, targetId, { lastEp: String(lastEp).slice(0, 40) });
+  res.json({ ok: !!f, item: f || null });
 });
 
 /* ============================================================

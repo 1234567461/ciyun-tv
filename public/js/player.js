@@ -65,8 +65,18 @@ export function detectType(url) {
   return 'hls'; // 默认按 HLS 处理
 }
 
-/** 浏览器原生 HLS 支持（Safari / iOS） */
-function nativeHlsSupported() {
+/**
+ * HLS 播放内核选择。
+ *
+ * ⚠️ 踩坑记录：Chromium/Chrome 的 canPlayType('application/vnd.apple.mpegurl')
+ * 返回 "maybe"，但它的**原生 HLS 实现不解析 MPEG-TS 里的 H.264 视频轨**
+ * （表现为 readyState=4、buffered=1、paused=false 正常出声，
+ *   而 videoWidth/videoHeight === 0 → 纯黑屏）。
+ * 因此策略调整为「hls.js 优先」：只要 MSE 可用就走 hls.js（解 TS 稳），
+ * 仅在 Safari/iOS（无 MSE，或原生 HLS 才是正解）才用原生直连。
+ */
+function nativeHlsUsable() {
+  if (typeof MediaSource !== 'undefined' && window.MediaSource) return false; // 有 MSE → 一律用 hls.js
   const v = document.createElement('video');
   return v.canPlayType('application/vnd.apple.mpegurl') !== '';
 }
@@ -330,14 +340,22 @@ export class Player {
 
     try {
       if (type === 'hls') {
-        if (nativeHlsSupported()) {
+        if (nativeHlsUsable()) {
           this.video.src = url;
         } else {
           const Hls = await ensureHls();
-          if (!Hls || !Hls.isSupported()) throw new Error('HLS 不受支持');
+          if (!Hls || !Hls.isSupported()) {
+            // hls.js 不可用（加载被拦 / MSE 缺失）→ 退回原生尝试
+            this.video.src = url;
+            if (autoplay) this.video.play().catch(() => {});
+            return;
+          }
           this.hls = new Hls({
             lowLatencyMode: false,
-            enableWorker: true,
+            // ⚠️ 关闭 Web Worker：hls.js 的 worker 走 blob: URL，
+            //    在严格 CSP（script-src 无 blob:）或部分 WebView 下会被拦，
+            //    表现为「无声无画」的黑屏。主线程解复用性能足够，稳定性优先。
+            enableWorker: false,
             maxBufferLength: 30,
             maxMaxBufferLength: 120,
             maxBufferSize: 60 * 1000 * 1000,
@@ -349,6 +367,8 @@ export class Player {
             capLevelToPlayerSize: false,
             // 吞吐量自适应，保证流畅
             abrEwmaDefaultEstimate: 1000000,
+            // 直播：从最新分片起播，减少首帧等待
+            liveDurationInfinity: false,
           });
           this.hls.loadSource(url);
           this.hls.attachMedia(this.video);

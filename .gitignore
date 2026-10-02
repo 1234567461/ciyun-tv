@@ -18,3 +18,6 @@ data/columns.raw.json
 # 构建产物
 dist/
 build/
+
+# 临时诊断脚本（排查用，不入库）
+.diag-tmp/

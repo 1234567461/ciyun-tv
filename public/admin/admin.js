@@ -34,6 +34,93 @@ function toast(msg, type = '') {
 }
 
 /* ============================================================
+   通用吸顶保存栏
+   —— 所有「表单型」设置页统一使用，解决「改完找不到保存按钮」
+   ------------------------------------------------------------
+   const bar = mountSaveBar({
+     title: '站点设置',
+     onSave: async () => { ... },      // 必须返回 true 表示成功
+     watch: '#s-name, #s-slogan',       // 监听这些控件的变更以点亮「未保存」
+     saveText: '保存设置',
+   });
+   bar.markClean();  // 保存成功后复位
+   ============================================================ */
+let _saveBarSeq = 0;
+function mountSaveBar({ title = '设置', onSave, watch = '', saveText = '保存', resetText = '重置', extra = '' } = {}) {
+  const id = 'savebar-' + ++_saveBarSeq;
+  const bar = document.createElement('div');
+  bar.className = 'save-bar';
+  bar.id = id;
+  bar.innerHTML =
+    '<div class="sb-left"><span class="sb-dot"></span>' +
+      '<span class="sb-title">' + esc(title) + '</span>' +
+      '<span class="sb-hint">尚未修改</span></div>' +
+    '<div class="sb-right">' + extra +
+      (resetText ? '<button class="btn btn-ghost sb-reset" type="button">' + esc(resetText) + '</button>' : '') +
+      '<button class="btn btn-primary sb-save" type="button">' + esc(saveText) + '</button>' +
+    '</div>';
+
+  const api = {
+    el: bar,
+    markDirty() {
+      if (bar.classList.contains('dirty')) return;
+      bar.classList.add('dirty');
+      $('.sb-hint', bar).textContent = '有未保存的改动';
+    },
+    markClean() {
+      bar.classList.remove('dirty');
+      $('.sb-hint', bar).textContent = '已保存';
+      setTimeout(() => { if (!bar.classList.contains('dirty')) $('.sb-hint', bar).textContent = '尚未修改'; }, 1800);
+    },
+  };
+
+  // 监听变更 → 点亮未保存
+  if (watch) {
+    const bind = () => $$(watch).forEach((el) => {
+      if (el.dataset.sbBound) return;
+      el.dataset.sbBound = '1';
+      const ev = el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'color' ? 'change' : 'input';
+      el.addEventListener(ev, () => api.markDirty());
+    });
+    bind();
+    // 动态渲染的控件（如弹窗/切 tab）延迟再绑一次
+    setTimeout(bind, 300);
+    setTimeout(bind, 900);
+  }
+
+  const doSave = async () => {
+    const btn = $('.sb-save', bar);
+    if (btn.disabled) return;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    try {
+      const ok = await onSave();
+      if (ok !== false) api.markClean();
+    } catch (e) {
+      toast(e.message || '保存失败', 'err');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  };
+  $('.sb-save', bar).onclick = doSave;
+  const rb = $('.sb-reset', bar);
+  if (rb) rb.onclick = () => { if (confirm('放弃未保存的改动并重新载入？')) location.reload(); };
+
+  // Ctrl/Cmd + S 快捷键
+  bar._keyHandler = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      doSave();
+    }
+  };
+  document.addEventListener('keydown', bar._keyHandler);
+  api.destroy = () => document.removeEventListener('keydown', bar._keyHandler);
+  return api;
+}
+
+/* ============================================================
    应用
    ============================================================ */
 const app = { tab: 'dashboard', site: null, settings: null };
@@ -524,6 +611,7 @@ function renderMtOverview(box, rev) {
 function renderMtConfig(box, m) {
   const sw = (id, on) => '<div class="switch ' + (on ? 'on' : '') + '" id="' + id + '"></div>';
   box.innerHTML =
+    '<div id="mt-config-savebar"></div>' +
     '<div class="card"><h3>\u2699\ufe0f 收费模式</h3>' +
       '<div class="switch-row"><div><div class="t">启用付费模块</div><div class="d">关闭后所有内容永久免费，无任何会员限制（开源默认）</div></div>' + sw('mt-en', m.enabled) + '</div>' +
       '<div class="field" style="margin-top:16px"><label>收费模式</label>' +
@@ -555,37 +643,41 @@ function renderMtConfig(box, m) {
       '<div><label>货币符号</label><input id="mt-cur" value="' + esc(m.currency || '\u00a5') + '" maxlength="4"></div></div>' +
       '<div class="field" style="margin-top:14px"><label>充值快捷金额（逗号分隔）</label><input id="mt-presets" value="' + esc((m.rechargePresets || []).join('\uff0c')) + '"></div>' +
     '</div>' +
-    '<button class="btn btn-primary" id="mt-save">保存全部设置</button>';
+    '</div>';
 
   ['mt-en', 'mt-bal', 'mt-redeem', 'mt-admin', 'mt-test'].forEach((id) => {
     const el = $('#' + id);
     if (el) el.onclick = () => el.classList.toggle('on');
   });
 
-  $('#mt-save').onclick = async () => {
-    const body = {
-      enabled: $('#mt-en').classList.contains('on'),
-      mode: $('#mt-mode').value,
-      provider: $('#mt-provider').value,
-      allowBalance: $('#mt-bal').classList.contains('on'),
-      redeemEnabled: $('#mt-redeem').classList.contains('on'),
-      adminUnlimited: $('#mt-admin').classList.contains('on'),
-      testMode: $('#mt-test').classList.contains('on'),
-      merchantId: $('#mt-pid').value.trim(),
-      gateway: $('#mt-gateway').value.trim(),
-      signKey: $('#mt-key').value.trim(),
-      notifyUrl: $('#mt-notify').value.trim(),
-      minRecharge: +$('#mt-min').value || 1,
-      orderTimeout: +$('#mt-timeout').value || 30,
-      currency: $('#mt-cur').value.trim() || '\u00a5',
-      rechargePresets: $('#mt-presets').value.split(/[\uff0c,]/).map((x) => +x.trim()).filter(Boolean),
-    };
-    try {
+  const bar = mountSaveBar({
+    title: '付费设置',
+    saveText: '保存付费设置',
+    watch: '#mt-pid, #mt-gateway, #mt-key, #mt-notify, #mt-min, #mt-timeout, #mt-cur, #mt-presets, #mt-mode, #mt-provider',
+    onSave: async () => {
+      const body = {
+        enabled: $('#mt-en').classList.contains('on'),
+        mode: $('#mt-mode').value,
+        provider: $('#mt-provider').value,
+        allowBalance: $('#mt-bal').classList.contains('on'),
+        redeemEnabled: $('#mt-redeem').classList.contains('on'),
+        adminUnlimited: $('#mt-admin').classList.contains('on'),
+        testMode: $('#mt-test').classList.contains('on'),
+        merchantId: $('#mt-pid').value.trim(),
+        gateway: $('#mt-gateway').value.trim(),
+        signKey: $('#mt-key').value.trim(),
+        notifyUrl: $('#mt-notify').value.trim(),
+        minRecharge: +$('#mt-min').value || 1,
+        orderTimeout: +$('#mt-timeout').value || 30,
+        currency: $('#mt-cur').value.trim() || '\u00a5',
+        rechargePresets: $('#mt-presets').value.split(/[\uff0c,]/).map((x) => +x.trim()).filter(Boolean),
+      };
       app.settings.monetize = await API('/api/admin/monetize', { method: 'PUT', body });
-      toast('设置已保存', 'ok');
-      viewMonetize($('#content'));
-    } catch (e) { toast(e.message, 'err'); }
-  };
+      toast('付费设置已保存', 'ok');
+      return true;
+    },
+  });
+  $('#mt-config-savebar').replaceWith(bar.el);
 }
 
 /* ---------------------------- 支付渠道 ---------------------------- */
@@ -863,6 +955,7 @@ async function renderMtQuota(box, m) {
   } catch (e) { /* 忽略，下面给提示 */ }
 
   box.innerHTML =
+    '<div id="mq-savebar"></div>' +
     '<div class="grid4" style="margin-bottom:18px">' +
       statCard('额度用户', String((stats && stats.users) || 0), '共 ' + ((stats && stats.withTimes) || 0) + ' 人持有次数') +
       statCard('无限额度', String((stats && stats.unlimited) || 0), '会员 / 管理员特权') +
@@ -893,8 +986,6 @@ async function renderMtQuota(box, m) {
       '<div style="font-size:12px;color:var(--text-mute);margin-top:6px">会员与管理员自动豁免，不消耗点数</div>' +
     '</div>' +
 
-    '<button class="btn btn-primary" id="mq-save">保存额度规则</button>' +
-
     '<div class="card" style="margin-top:20px"><h3>\ud83d\udc65 用户额度</h3>' +
       '<div class="row" style="margin-bottom:14px;gap:10px">' +
         '<div style="flex:1"><input id="mq-kw" placeholder="搜索账号 / 昵称"></div>' +
@@ -910,28 +1001,32 @@ async function renderMtQuota(box, m) {
     if (el) el.onclick = () => el.classList.toggle('on');
   });
 
-  $('#mq-save').onclick = async () => {
-    const body = {
-      quotaEnabled: $('#mq-en').classList.contains('on'),
-      requireLogin: $('#mq-login').classList.contains('on'),
-      vipFreePlays: $('#mq-vipfree').classList.contains('on'),
-      dedupeDaily: $('#mq-dedupe').classList.contains('on'),
-      allowPointsForPlay: $('#mq-pointplay').classList.contains('on'),
-      freeDailyPlays: +$('#mq-free').value || 0,
-      costPerPlay: Math.max(1, +$('#mq-cost').value || 1),
-      pointCosts: {
-        play: +$('#mq-p-play').value || 0,
-        hd: +$('#mq-p-hd').value || 0,
-        download: +$('#mq-p-dl').value || 0,
-        noAd: +$('#mq-p-noad').value || 0,
-      },
-    };
-    try {
+  const bar = mountSaveBar({
+    title: '额度设置',
+    saveText: '保存额度规则',
+    watch: '#mq-free, #mq-cost, #mq-p-play, #mq-p-hd, #mq-p-dl, #mq-p-noad',
+    onSave: async () => {
+      const body = {
+        quotaEnabled: $('#mq-en').classList.contains('on'),
+        requireLogin: $('#mq-login').classList.contains('on'),
+        vipFreePlays: $('#mq-vipfree').classList.contains('on'),
+        dedupeDaily: $('#mq-dedupe').classList.contains('on'),
+        allowPointsForPlay: $('#mq-pointplay').classList.contains('on'),
+        freeDailyPlays: +$('#mq-free').value || 0,
+        costPerPlay: Math.max(1, +$('#mq-cost').value || 1),
+        pointCosts: {
+          play: +$('#mq-p-play').value || 0,
+          hd: +$('#mq-p-hd').value || 0,
+          download: +$('#mq-p-dl').value || 0,
+          noAd: +$('#mq-p-noad').value || 0,
+        },
+      };
       await API('/api/admin/monetize', { method: 'PUT', body });
       toast('额度规则已保存', 'ok');
-      viewMonetize($('#content'));
-    } catch (e) { toast(e.message, 'err'); }
-  };
+      return true;
+    },
+  });
+  $('#mq-savebar').replaceWith(bar.el);
 
   const loadUsers = async () => {
     const q = new URLSearchParams({ keyword: $('#mq-kw').value.trim(), status: $('#mq-status').value, page: 1, size: 20 });
@@ -1224,8 +1319,8 @@ async function viewSettings(c) {
   const s = app.settings;
   let cats = (app.site && app.site.categories) || [];
   c.innerHTML = `
-    <div class="page-head"><div><h2>站点设置</h2><div class="sub">站点信息、外观与播放策略</div></div>
-      <button class="btn btn-primary" id="save-set">保存设置</button></div>
+    <div class="page-head"><div><h2>站点设置</h2><div class="sub">站点信息、外观与播放策略</div></div></div>
+    <div id="settings-savebar"></div>
 
     <div class="grid2">
       <div class="card">
@@ -1262,7 +1357,28 @@ async function viewSettings(c) {
         <div style="font-size:12.5px;color:var(--warn)">⚠️ 开源部署时请务必修改默认密码</div>
       </div>
     </div>
-    ${communityCard()}`;
+    ${communityCard()}
+
+    <div class="card" style="margin-top:18px">
+      <h3>✉️ 邮箱服务（用于登录/注册验证码、找回密码）</h3>
+      <div class="field-row">
+        <div class="field"><label>SMTP 服务器</label><input id="s-smtp-host" value="${esc(s.mail && s.mail.host || '')}" placeholder="smtp.qq.com"></div>
+        <div class="field"><label>端口</label><input id="s-smtp-port" type="number" value="${(s.mail && s.mail.port) || 465}"></div>
+      </div>
+      <div class="field-row" style="margin-top:12px">
+        <div class="field"><label>账号</label><input id="s-smtp-user" value="${esc(s.mail && s.mail.user || '')}" placeholder="you@qq.com"></div>
+        <div class="field"><label>授权码 / 密码</label><input id="s-smtp-pass" type="password" value="${esc(s.mail && s.mail.pass || '')}" placeholder="SMTP 授权码"></div>
+      </div>
+      <div class="field-row" style="margin-top:12px">
+        <div class="field"><label>发件人显示名</label><input id="s-smtp-from" value="${esc(s.mail && s.mail.from || '慈云影视')}"></div>
+        <div class="field"><label>加密方式</label><select id="s-smtp-secure">
+          <option value="ssl" ${!(s.mail && s.mail.secure === 'starttls') ? 'selected' : ''}>SSL/TLS（465）</option>
+          <option value="starttls" ${(s.mail && s.mail.secure === 'starttls') ? 'selected' : ''}>STARTTLS（587）</option>
+        </select></div>
+      </div>
+      <div class="switch-row" style="margin-top:6px"><div><div class="t">注册需邮箱验证</div><div class="d">开启后新用户注册必须完成邮箱验证码校验</div></div>
+        <div class="switch ${s.community.needEmail ? 'on' : ''}" id="s-needmail"></div></div>
+    </div>`;
 
   const sw = (id, key) => {
     const el = $(id);
@@ -1271,25 +1387,43 @@ async function viewSettings(c) {
   sw('#p-autoq'); sw('#p-failover'); sw('#p-preload');
   bindCommunityCard();
 
-  $('#save-set').onclick = async () => {
-    const patch = {
-      siteName: $('#s-name').value,
-      slogan: $('#s-slogan').value,
-      announcement: $('#s-notice').value,
-      adminUsername: $('#s-admin').value,
-      adminPassword: $('#s-pass').value,
-      theme: { mode: $('#s-mode').value, primary: $('#s-primary').value, accent: $('#s-accent').value },
-      playback: {
-        autoQuality: $('#p-autoq').classList.contains('on'),
-        autoFailover: $('#p-failover').classList.contains('on'),
-        preload: $('#p-preload').classList.contains('on'),
-      },
-    };
-    app.settings = await API('/api/admin/settings', { method: 'PUT', body: patch });
-    await saveCommunityCard();
-    toast('设置已保存', 'ok');
-  };
+  const bar = mountSaveBar({
+    title: '站点设置',
+    saveText: '保存设置',
+    watch: '#s-name, #s-slogan, #s-notice, #s-mode, #s-primary, #s-accent, #s-admin, #s-pass, #s-smtp-host, #s-smtp-port, #s-smtp-user, #s-smtp-pass, #s-smtp-from, #s-smtp-secure',
+    onSave: async () => {
+      const patch = {
+        siteName: $('#s-name').value,
+        slogan: $('#s-slogan').value,
+        announcement: $('#s-notice').value,
+        adminUsername: $('#s-admin').value,
+        adminPassword: $('#s-pass').value,
+        theme: { mode: $('#s-mode').value, primary: $('#s-primary').value, accent: $('#s-accent').value },
+        playback: {
+          autoQuality: $('#p-autoq').classList.contains('on'),
+          autoFailover: $('#p-failover').classList.contains('on'),
+          preload: $('#p-preload').classList.contains('on'),
+        },
+        mail: {
+          host: $('#s-smtp-host').value.trim(),
+          port: +$('#s-smtp-port').value || 465,
+          user: $('#s-smtp-user').value.trim(),
+          pass: $('#s-smtp-pass').value,
+          from: $('#s-smtp-from').value.trim(),
+          secure: $('#s-smtp-secure').value,
+        },
+        community: { needEmail: $('#s-needmail').classList.contains('on') },
+      };
+      const r = await API('/api/admin/settings', { method: 'PUT', body: patch });
+      app.settings = r;
+      await saveCommunityCard();
+      toast('设置已保存', 'ok');
+      return true;
+    },
+  }).el;
+  $('#settings-savebar').replaceWith(bar.el);
 }
+
 
 /* ============================================================
    数据备份
@@ -1523,36 +1657,42 @@ async function viewFamilies(c) {
         row('f-cvip', '儿童禁用超清/下载', '限制增值功能', cfg.childBlockVip !== false) +
         row('f-ccmt', '儿童禁言', '不能发评论/弹幕', cfg.childBlockComment !== false) +
       '</div>' +
-    '</div>' +
-    '<button class="btn btn-primary btn-sm" id="f-save" style="margin-top:18px">保存设置</button>';
+    '</div>';
 
   ['f-en', 'f-vip', 'f-share', 'f-leave', 'f-shareq', 'f-auto', 'f-parent', 'f-cvip', 'f-ccmt'].forEach((id) => {
     const el = $('#' + id);
     if (el) el.onclick = () => el.classList.toggle('on');
   });
-  $('#f-save').onclick = async () => {
-    const body = {
-      enabled: $('#f-en').classList.contains('on'),
-      requireVip: $('#f-vip').classList.contains('on'),
-      shareVip: $('#f-share').classList.contains('on'),
-      allowLeave: $('#f-leave').classList.contains('on'),
-      shareQuota: $('#f-shareq').classList.contains('on'),
-      autoApprove: $('#f-auto').classList.contains('on'),
-      parentalEnabled: $('#f-parent').classList.contains('on'),
-      childBlockVip: $('#f-cvip').classList.contains('on'),
-      childBlockComment: $('#f-ccmt').classList.contains('on'),
-      maxMembers: +$('#f-max').value || 5,
-      maxStreams: +$('#f-streams').value || 0,
-      deviceLimit: +$('#f-device').value || 0,
-      streamPolicy: $('#f-policy').value,
-      familyQuotaPool: +$('#f-pool').value || 0,
-      inviteTtlDays: +$('#f-ttl').value || 3,
-      inviteRole: $('#f-role').value,
-      childMaxRating: $('#f-rating').value,
-    };
-    app.settings.family = await API('/api/admin/family', { method: 'PUT', body });
-    toast('已保存', 'ok');
-  };
+  const bar = mountSaveBar({
+    title: '家庭共享设置',
+    saveText: '保存家庭设置',
+    watch: '#f-max, #f-streams, #f-device, #f-policy, #f-pool, #f-ttl, #f-role, #f-rating',
+    onSave: async () => {
+      const body = {
+        enabled: $('#f-en').classList.contains('on'),
+        requireVip: $('#f-vip').classList.contains('on'),
+        shareVip: $('#f-share').classList.contains('on'),
+        allowLeave: $('#f-leave').classList.contains('on'),
+        shareQuota: $('#f-shareq').classList.contains('on'),
+        autoApprove: $('#f-auto').classList.contains('on'),
+        parentalEnabled: $('#f-parent').classList.contains('on'),
+        childBlockVip: $('#f-cvip').classList.contains('on'),
+        childBlockComment: $('#f-ccmt').classList.contains('on'),
+        maxMembers: +$('#f-max').value || 5,
+        maxStreams: +$('#f-streams').value || 0,
+        deviceLimit: +$('#f-device').value || 0,
+        streamPolicy: $('#f-policy').value,
+        familyQuotaPool: +$('#f-pool').value || 0,
+        inviteTtlDays: +$('#f-ttl').value || 3,
+        inviteRole: $('#f-role').value,
+        childMaxRating: $('#f-rating').value,
+      };
+      app.settings.family = await API('/api/admin/family', { method: 'PUT', body });
+      toast('家庭设置已保存', 'ok');
+      return true;
+    },
+  });
+  $('#fam-cfg').parentElement.insertBefore(bar.el, $('#fam-cfg').parentElement.firstChild);
 
   const d = await API('/api/admin/families');
   $('#fam-list').innerHTML = d.families.length

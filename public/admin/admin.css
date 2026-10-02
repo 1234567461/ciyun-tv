@@ -245,3 +245,40 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
   .md-foot { flex-direction: column; align-items: stretch; }
   .md-btns { justify-content: flex-end; }
 }
+
+/* ============================================================
+   吸顶保存栏（sticky save bar）
+   —— 解决「改完设置找不到保存按钮」的问题：
+      所有设置类页面在顶部固定一条操作栏，滚动时始终可见
+   ============================================================ */
+.save-bar {
+  position: sticky; top: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 18px; margin: -4px 0 18px;
+  background: linear-gradient(180deg, rgba(18,18,26,.98), rgba(18,18,26,.92));
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.28);
+}
+.save-bar .sb-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.save-bar .sb-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.save-bar .sb-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--text-mute);
+  flex: none; transition: background .2s;
+}
+.save-bar.dirty .sb-dot { background: var(--warn); box-shadow: 0 0 0 4px rgba(245,158,11,.18); }
+.save-bar .sb-hint { font-size: 12.5px; color: var(--text-mute); }
+.save-bar.dirty .sb-hint { color: var(--warn); }
+.save-bar .sb-right { display: flex; align-items: center; gap: 10px; flex: none; }
+.save-bar .btn { padding: 8px 20px; }
+.save-bar .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 页面内旧版保存按钮统一抬升层级，避免被遮挡 */
+.page-head { position: relative; z-index: 1; }
+
+/* 移动端：保存栏按钮拉通，便于拇指点击 */
+@media (max-width: 640px) {
+  .save-bar { flex-wrap: wrap; padding: 10px 12px; }
+  .save-bar .sb-right { width: 100%; }
+  .save-bar .sb-right .btn { flex: 1; }
+}

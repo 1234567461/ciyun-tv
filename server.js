@@ -43,7 +43,16 @@ function withDeadline(promise, ms, fallback) {
 app.set('trust proxy', true); // 反向代理下取真实 IP（限流/锁定依赖）
 
 app.use(security.securityHeaders);
-app.use(compression());
+// 压缩：JS/CSS 体积随功能增长已明显增大，必须 gzip 后才不致拖慢首屏
+app.use(compression({
+  level: 6,
+  threshold: 512,          // >512B 才压缩，小响应跳过减少开销
+  filter: (req, res) => {
+    // 流媒体代理（m3u8/ts 分片）不压缩，避免破坏实时性与 CPU 浪费
+    if (/^\/(api\/(stream|proxy|live)|hls)/.test(req.path)) return false;
+    return compression.filter(req, res);
+  },
+}));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -608,7 +617,9 @@ app.get('/api/multi/:srcId/list', async (req, res) => {
   if (!src) return res.status(404).json({ error: 'source not found' });
   try {
     const r = await sources.call(src, 'list', {
-      typeId: req.query.type || '',
+      // ⚠️ 前端传 typeId，历史接口用 type —— 两者都要接受，
+      //    否则分类筛选静默失效（永远返回全量列表）。
+      typeId: req.query.typeId || req.query.type || '',
       page: parseInt(req.query.page, 10) || 1,
       keyword: req.query.wd || '',
     });
@@ -3862,7 +3873,22 @@ app.use(
   '/hls',
   express.static(path.join(__dirname, 'node_modules', 'hls.js', 'dist'), { maxAge: '7d' })
 );
-app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
+app.use(express.static(path.join(__dirname, 'public'), {
+  extensions: ['html'],
+  etag: true,
+  lastModified: true,
+  // 前端资源变更靠 ETag 协商（max-age=0 + 304）不可靠且每次全量校验，
+  // 改为短缓存：JS/CSS 1 小时强缓存，命中即 0 请求；带 ?v= 版本号时更久
+  setHeaders: (res, filePath, stat) => {
+    if (/\.(js|css)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+    } else if (/\.(png|jpe?g|webp|gif|svg|ico|woff2?|ttf)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+    } else if (/\.html?$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  },
+}));
 
 // SPA 兜底
 app.get('*', (req, res, next) => {

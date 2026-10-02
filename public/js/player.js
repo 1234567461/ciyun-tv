@@ -101,6 +101,10 @@ export class Player {
     this.flv = null;
     this.dash = null;
     this.failCount = 0;
+    // 连续失败计数（拉取成功即清零），与 failCount 的「累计」语义区分开
+    this.failStreak = 0;
+    this.mediaStreak = 0;
+    this._netTimer = null;
     this.retryLine = null;
     this._build();
     this._bindKeys();
@@ -360,34 +364,58 @@ export class Player {
             maxMaxBufferLength: 120,
             maxBufferSize: 60 * 1000 * 1000,
             liveSyncDurationCount: 3,
-            fragLoadingMaxRetry: 6,
-            manifestLoadingMaxRetry: 4,
-            levelLoadingMaxRetry: 4,
+            // 直播容错：分片抓取失败自动重试，且间隔递进避免雪崩
+            fragLoadingMaxRetry: 8,
+            fragLoadingRetryDelay: 500,
+            fragLoadingMaxRetryTimeout: 12000,
+            manifestLoadingMaxRetry: 6,
+            levelLoadingMaxRetry: 6,
+            // 直播拉流超时放宽，避免 CDN 抖动直接判死
+            manifestLoadingTimeOut: 15000,
+            levelLoadingTimeOut: 15000,
+            fragLoadingTimeOut: 25000,
             startLevel: -1,          // 自动清晰度
             capLevelToPlayerSize: false,
             // 吞吐量自适应，保证流畅
             abrEwmaDefaultEstimate: 1000000,
             // 直播：从最新分片起播，减少首帧等待
             liveDurationInfinity: false,
+            // 直播：允许回退重试已过期分片
+            appendErrorMaxRetry: 5,
           });
           this.hls.loadSource(url);
           this.hls.attachMedia(this.video);
           this.hls.on(Hls.Events.ERROR, (evt, data) => {
-            if (data.fatal) {
-              switch (data.type) {
-                case Hls.ErrorTypes.NETWORK_ERROR:
-                  this.hls.startLoad();
-                  if (++this.failCount > 2) this._handleError('网络错误，尝试切换线路');
-                  break;
-                case Hls.ErrorTypes.MEDIA_ERROR:
-                  this.hls.recoverMediaError();
-                  if (++this.failCount > 3) this._handleError('媒体错误');
-                  break;
-                default:
-                  this._handleError('播放失败');
+            if (!data.fatal) return;   // 非致命错误 hls.js 自行处理，不干预
+            // ⚠️ 直播场景网络抖动是常态（CDN 切节点、分片重试都会触发 NETWORK_ERROR）。
+            //    因此这里必须用「连续失败」计数：只要中间成功拉到过数据就清零，
+            //    否则累积计数会在播放稳定时被一次偶发抖动推过阈值 → 永久报错。
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR: {
+                const n = ++this.failStreak;
+                // 直播用渐进退避重启，避免频繁 startLoad 产生雪崩
+                const delay = Math.min(1500 * n, 6000);
+                clearTimeout(this._netTimer);
+                this._netTimer = setTimeout(() => {
+                  if (this.hls) { try { this.hls.startLoad(); } catch {} }
+                }, delay);
+                // 容忍度提高：连续 6 次网络失败才认为线路不可用
+                if (n > 6) this._handleError('网络错误，尝试切换线路');
+                break;
               }
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                try { this.hls.recoverMediaError(); } catch {}
+                if (++this.mediaStreak > 4) this._handleError('媒体错误');
+                break;
+              default:
+                this._handleError('播放失败');
             }
           });
+          // 拉取成功即清零连续失败计数（关键：让偶发错误不再累积）
+          const resetStreak = () => { this.failStreak = 0; this.mediaStreak = 0; };
+          this.hls.on(Hls.Events.FRAG_LOADED, resetStreak);
+          this.hls.on(Hls.Events.LEVEL_LOADED, resetStreak);
+          this.hls.on(Hls.Events.FRAG_BUFFERED, resetStreak);
           // 动态缓冲调节：卡顿时加大缓冲
           this.hls.on(Hls.Events.LEVEL_LOADED, (evt, d) => {
             if (d.details && d.details.live) this.hls.config.liveSyncDurationCount = 3;
@@ -462,6 +490,8 @@ export class Player {
   /** 切换线路 */
   switchLine(index) {
     this.failCount = 0;
+    this.failStreak = 0;
+    this.mediaStreak = 0;
     this.play(index, { autoplay: true });
   }
 
@@ -522,6 +552,7 @@ export class Player {
     clearInterval(this._posTimer);
     clearTimeout(this._hideTimer);
     clearTimeout(this._tipTimer);
+    clearTimeout(this._netTimer);
     document.removeEventListener('keydown', this._keyHandler);
     this._destroyEngine();
     this.el.innerHTML = '';

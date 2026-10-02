@@ -710,7 +710,13 @@ app.post('/api/admin/login', (req, res) => {
   const s = store.settings;
   const expectUser = s.adminUsername || 'admin';
   // ③ 口令校验：支持已哈希与历史明文，校验通过后自动升级为哈希
-  const stored = s.adminPassword || 'admin888';
+  //    ⚠️ 生产环境（NODE_ENV=production）不再接受默认口令 admin888，
+  //       避免开源代码部署后因未改密被直接接管后台。
+  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+  const stored = s.adminPassword || (isProd ? '' : 'admin888');
+  if (!stored) {
+    return res.status(500).json({ error: '未设置管理员密码，请通过环境变量 ADMIN_PASSWORD 初始化' });
+  }
   const uOk = String(username || '') === expectUser;
   const pv = security.verifyAdminPassword(password, stored);
   if (!uOk || !pv.ok) {
@@ -3899,16 +3905,48 @@ app.get('*', (req, res, next) => {
 /* ============================================================
  * 启动
  * ============================================================ */
+
+/**
+ * 首次启动初始化管理员口令。
+ * 支持通过环境变量注入，避免开源部署沿用默认密码被接管后台：
+ *   ADMIN_USERNAME     管理员账号（默认 admin）
+ *   ADMIN_PASSWORD     管理员密码，设置后立即写入哈希
+ */
+function initAdminFromEnv() {
+  const envUser = String(process.env.ADMIN_USERNAME || '').trim();
+  const envPass = String(process.env.ADMIN_PASSWORD || '').trim();
+  if (!envUser && !envPass) return false;
+  const patch = {};
+  if (envUser) patch.adminUsername = envUser;
+  if (envPass) patch.adminPassword = security.hashAdminPassword(envPass);
+  try {
+    store.setSettings(patch);
+    return true;
+  } catch { return false; }
+}
+
 if (require.main === module) {
+  const envInited = initAdminFromEnv();
   app.listen(PORT, HOST, () => {
+    const s = store.settings || {};
+    // 判断是否仍在用默认口令：直接拿 admin888 做一次校验即可（哈希/明文都适用）
+    const usingDefault = !s.adminPassword
+      ? true
+      : security.verifyAdminPassword('admin888', s.adminPassword).ok;
     console.log('');
     console.log('  ┌───────────────────────────────────────────────┐');
     console.log('  │           慈云影视  ·  已启动                  │');
     console.log('  ├───────────────────────────────────────────────┤');
     console.log(`  │  前台      http://localhost:${PORT}/              │`);
     console.log(`  │  后台      http://localhost:${PORT}/admin/        │`);
-    console.log(`  │  账号      admin / admin888                    │`);
     console.log('  └───────────────────────────────────────────────┘');
+    if (envInited) {
+      console.log('  [安全] 已通过环境变量初始化管理员账号');
+    } else if (usingDefault) {
+      console.log('  [安全] ⚠️  后台仍在使用默认口令 admin / admin888');
+      console.log('         请立即登录后台在「站点设置」中修改！');
+      console.log('         生产环境请用 ADMIN_PASSWORD 环境变量初始化。');
+    }
     console.log('');
     warmupLive();
     warmupCategories();

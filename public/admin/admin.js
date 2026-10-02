@@ -145,13 +145,13 @@ function renderLogin() {
         </div>
         <div class="login-sub">管理你的影视聚合站点</div>
         <div class="field">
-          <div class="input-wrap"><input id="u" placeholder="管理员账号" value="admin" autocomplete="username"></div>
+          <div class="input-wrap"><input id="u" placeholder="管理员账号" autocomplete="username"></div>
         </div>
         <div class="field">
-          <div class="input-wrap"><input id="p" type="password" placeholder="密码" value="admin888" autocomplete="current-password"></div>
+          <div class="input-wrap"><input id="p" type="password" placeholder="密码" autocomplete="current-password"></div>
         </div>
         <button class="btn-login" id="login-btn">登 录</button>
-        <div class="login-tip">默认账号 admin / admin888，请在「站点设置」中及时修改</div>
+        <div class="login-tip">首次部署默认账号 admin / admin888，登录后请立即在「站点设置」中修改</div>
       </div>
     </div>`;
   const doLogin = async () => {

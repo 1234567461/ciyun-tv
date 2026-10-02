@@ -11,6 +11,7 @@ import { mountChat } from './chat.js';
 import { createDanmaku, createDanmakuBar } from './danmaku.js';
 import { renderFamilyPage } from './family.js';
 import { renderVipPage } from './vip.js';
+import { renderSocialPage } from './social.js';
 
 const state = {
   site: null,
@@ -258,6 +259,7 @@ async function route() {
     if (seg[0] === 'profile') return pageProfile(root, params.get('tab') || 'info');
     if (seg[0] === 'family') return renderFamilyPage(root, state.site);
     if (seg[0] === 'vip') return renderVipPage(root, state.site, { tab: params.get('tab') || 'plans' });
+    if (seg[0] === 'social') return renderSocialPage(root, params.get('tab') || 'messages');
     if (seg[0] === 'join') return pageJoin(root, params.get('code') || '');
     if (seg[0] === 'u') return pageUserProfile(root, seg[1]);
     return page404(root);

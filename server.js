@@ -1188,9 +1188,14 @@ app.post('/api/mail/code', async (req, res) => {
   }
 
   const r = await mail.sendCode(mailCfg(), to, sc);
-  if (!r.ok) return res.status(400).json({ error: r.error });
+  if (!r.ok) {
+    // 邮件服务未配置：如实告知，但绝不回显验证码
+    if (r.mailNotConfigured) return res.status(503).json({ error: r.error, mailNotConfigured: true });
+    return res.status(400).json({ error: r.error });
+  }
   const out = { ok: true, scene: sc, message: '验证码已发送，请查收邮箱（5 分钟内有效）' };
-  // 未配置 SMTP → 开发模式回显验证码，便于本地体验
+  // 🔒 仅在部署方显式开启 MAIL_DEV_ECHO=1 且非生产环境时，才回显验证码。
+  //    默认关闭：防止线上任何人拿他人邮箱取码重置密码。
   if (r.devMode) {
     out.devMode = true;
     out.devCode = r.devCode;
@@ -1269,8 +1274,12 @@ app.post('/api/user/email/bind-code', async (req, res) => {
   if (store.findUserByEmail(email)) return res.status(409).json({ error: '该邮箱已被使用', field: 'email' });
 
   const r = await mail.sendCode(mailCfg(), email, 'bind');
-  if (!r.ok) return res.status(400).json({ error: r.error });
+  if (!r.ok) {
+    if (r.mailNotConfigured) return res.status(503).json({ error: r.error, mailNotConfigured: true });
+    return res.status(400).json({ error: r.error });
+  }
   const out = { ok: true, message: '验证码已发送' };
+  // 🔒 同 /api/mail/code：默认不回显，需显式 MAIL_DEV_ECHO=1 且非生产
   if (r.devMode) { out.devMode = true; out.devCode = r.devCode; }
   res.json(out);
 });
@@ -3653,6 +3662,166 @@ app.delete('/api/admin/shorts/:id', requireAdmin, (req, res) => {
  * 追剧（收藏订阅 + 更新追踪）
  * ============================================================ */
 /** 我的追剧列表 */
+/* ============================================================
+ * API：社交 —— 加好友 / 私信
+ * ============================================================ */
+const SOCIAL_ENABLED = () => {
+  const c = store.settings.community || {};
+  return c.enabled !== false && c.socialEnabled !== false; // 后台可关闭社交
+};
+
+/** 统一校验：社交开关 + 登录 */
+function requireSocial(req, res, next) {
+  if (!SOCIAL_ENABLED()) return res.status(403).json({ error: '本站已关闭社交功能' });
+  requireUser(req, res, next);
+}
+
+/** 用户公开信息（脱敏，不含邮箱/密码等） */
+function publicUser(acc) {
+  const u = store.findUser(acc);
+  if (!u) return { account: acc, nickname: acc, avatar: '' };
+  return {
+    account: u.account,
+    nickname: u.nickname || u.account,
+    avatar: u.avatar || '',
+    vip: !!(u.vip && u.vip.expire > Date.now()),
+    createdAt: u.createdAt || 0,
+  };
+}
+
+/** 社交总览：好友数 + 未读私信数（用于顶栏红点） */
+app.get('/api/social/summary', requireSocial, (req, res) => {
+  const me = req.user.account;
+  res.json({
+    friends: store.listFriends(me).length,
+    requests: store.listFriendRequests(me).length,
+    unread: store.unreadCount(me),
+    enabled: true,
+  });
+});
+
+/** 搜索用户（加好友用） */
+app.get('/api/social/search', requireSocial, (req, res) => {
+  const kw = req.query.q || '';
+  const list = store.searchUsers(kw, { exclude: req.user.account });
+  // 标注与我的关系，便于前端直接渲染按钮状态
+  res.json({
+    list: list.map((u) => {
+      const f = store.findFriendship(req.user.account, u.account);
+      return {
+        ...u,
+        relation: !f ? 'none' : f.status === 'accepted' ? 'friend' : (f.from === req.user.account ? 'sent' : 'received'),
+      };
+    }),
+  });
+});
+
+/** 好友列表（含在线状态） */
+app.get('/api/social/friends', requireSocial, (req, res) => {
+  const me = req.user.account;
+  const list = store.listFriends(me).map((acc) => {
+    const u = publicUser(acc);
+    const conv = store.convId(me, acc);
+    return { ...u, online: !!chat.online(conv), unread: store.unreadCount(acc) >= 0 ? countUnreadFrom(me, acc) : 0 };
+  });
+  res.json({ list });
+});
+
+/** 计算「我收到的、来自某人的未读数」 */
+function countUnreadFrom(me, other) {
+  const meL = String(me).toLowerCase();
+  const conv = store.convId(me, other);
+  return store.listMessages(me, other, { limit: 100000 }).filter((m) => m.conv === conv && m.to === meL && !m.read).length;
+}
+
+/** 待处理的好友申请 */
+app.get('/api/social/requests', requireSocial, (req, res) => {
+  const me = req.user.account;
+  res.json({
+    received: store.listFriendRequests(me).map((f) => ({ ...publicUser(f.a === me ? f.b : f.a), from: f.from, at: f.createdAt })),
+    sent: store.listSentRequests(me).map((f) => ({ ...publicUser(f.a === me ? f.b : f.a), at: f.createdAt })),
+  });
+});
+
+/** 发起好友申请 */
+app.post('/api/social/request', requireSocial, (req, res) => {
+  const me = req.user.account;
+  const to = String((req.body && req.body.account) || '').toLowerCase();
+  if (!to) return res.status(400).json({ error: '缺少账号' });
+  if (to === me) return res.status(400).json({ error: '不能添加自己为好友' });
+  if (!store.findUser(to)) return res.status(404).json({ error: '该用户不存在' });
+
+  const r = store.requestFriend(me, to);
+  if (!r.ok) return res.status(400).json({ error: r.reason === 'self' ? '不能添加自己' : '操作失败' });
+  const msg = r.status === 'accepted' ? '你们已成为好友' : '好友申请已发送';
+  res.json({ ok: true, status: r.status, message: msg });
+});
+
+/** 接受好友申请 */
+app.post('/api/social/accept', requireSocial, (req, res) => {
+  const me = req.user.account;
+  const other = String((req.body && req.body.account) || '').toLowerCase();
+  const r = store.acceptFriend(me, other);
+  if (!r.ok) return res.status(400).json({ error: r.reason === 'cannot_accept_own' ? '不能接受自己发出的申请' : '申请不存在' });
+  res.json({ ok: true, status: 'accepted', message: '已添加为好友' });
+});
+
+/** 删除好友 / 拒绝申请 / 撤回申请 */
+app.post('/api/social/remove', requireSocial, (req, res) => {
+  const me = req.user.account;
+  const other = String((req.body && req.body.account) || '').toLowerCase();
+  store.removeFriend(me, other);
+  res.json({ ok: true, message: '已解除好友关系' });
+});
+
+/** 会话列表（私信首页） */
+app.get('/api/social/conversations', requireSocial, (req, res) => {
+  const list = store.listConversations(req.user.account).map((c) => ({
+    ...c,
+    online: !!chat.online(store.convId(req.user.account, c.account)),
+  }));
+  res.json({ list, totalUnread: store.unreadCount(req.user.account) });
+});
+
+/** 拉取与某人的聊天记录 */
+app.get('/api/social/messages/:account', requireSocial, (req, res) => {
+  const me = req.user.account;
+  const other = String(req.params.account || '').toLowerCase();
+  if (!store.findFriendship(me, other) || store.findFriendship(me, other).status !== 'accepted') {
+    return res.status(403).json({ error: '你们还不是好友' });
+  }
+  const limit = Math.min(500, parseInt(req.query.limit, 10) || 200);
+  const list = store.listMessages(me, other, { limit });
+  // 打开会话即标记已读
+  store.readMessages(me, other);
+  res.json({ list, peer: publicUser(other) });
+});
+
+/** 发送私信 */
+app.post('/api/social/messages', requireSocial, (req, res) => {
+  const me = req.user.account;
+  const to = String((req.body && req.body.to) || '').toLowerCase();
+  const text = String((req.body && req.body.text) || '').trim();
+  if (!to) return res.status(400).json({ error: '缺少收信人' });
+  if (!text) return res.status(400).json({ error: '消息不能为空' });
+  if (text.length > 2000) return res.status(400).json({ error: '消息过长（最多 2000 字）' });
+
+  const f = store.findFriendship(me, to);
+  if (!f || f.status !== 'accepted') return res.status(403).json({ error: '仅好友之间可发送私信' });
+
+  // 限流：每分钟最多 30 条，防刷屏
+  const rl = security.rateLimit('msg:' + me, { window: 60 * 1000, max: 30 });
+  if (!rl.ok) return res.status(429).json({ error: '发送过快，请稍后再试' });
+
+  const rec = store.sendMessage(me, to, text);
+  res.json({ ok: true, message: rec });
+});
+
+/** 未读私信数（轮询用，轻量） */
+app.get('/api/social/unread', requireSocial, (req, res) => {
+  res.json({ unread: store.unreadCount(req.user.account) });
+});
+
 app.get('/api/follows', requireUser, (req, res) => {
   res.json({ list: store.getFollows(req.user.account) });
 });

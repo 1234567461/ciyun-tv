@@ -165,8 +165,12 @@ export function showAnnouncement(text) {
   } catch { /* 隐私模式忽略 */ }
   if (muted || seen === fingerprint) return; // 已读或已静音 → 不打扰
 
+  // 滚动定时器的清理句柄（先声明，供 close 引用）
+  let stopTimer = null;
+
   const close = () => {
     try { localStorage.setItem(ANN_KEY, fingerprint); } catch {}
+    if (stopTimer) stopTimer();          // 关掉循环滚动，避免后台空转
     mask.classList.add('ann-out');
     setTimeout(() => mask.remove(), 220);
     document.removeEventListener('keydown', onKey);
@@ -178,14 +182,55 @@ export function showAnnouncement(text) {
   const onKey = (e) => { if (e.key === 'Escape') close(); };
 
   const body = h('div', { class: 'ann-body' });
+  const track = h('div', { class: 'ann-track' });
+  // 多条公告：自动循环滚动轮播；单条则静态展示
+  const carousel = items.length > 1;
+  if (carousel) body.classList.add('ann-scroll');
+
   items.forEach((line, i) => {
-    body.appendChild(
-      h('div', { class: 'ann-item' }, [
+    track.appendChild(
+      h('div', { class: 'ann-item' + (i === 0 ? ' on' : '') }, [
         h('span', { class: 'ann-dot', text: String(i + 1) }),
         h('span', { class: 'ann-text', text: line }),
       ])
     );
   });
+  body.appendChild(track);
+
+  // 进度点（多条目时显示）
+  let dots = null;
+  if (carousel) {
+    dots = h('div', { class: 'ann-dots' },
+      items.map((_, i) => h('i', { class: i === 0 ? 'on' : '' }))
+    );
+  }
+
+  /** 滚动控制：定时切换条目，鼠标悬停/聚焦时暂停 */
+  let idx = 0;
+  let timer = null;
+  const slides = () => [...track.children];
+  const goto = (n) => {
+    const list = slides();
+    idx = (n + list.length) % list.length;
+    list.forEach((el, i) => el.classList.toggle('on', i === idx));
+    if (dots) [...dots.children].forEach((d, i) => d.classList.toggle('on', i === idx));
+  };
+  const start = () => {
+    if (!carousel || timer) return;
+    timer = setInterval(() => goto(idx + 1), 2600);
+  };
+  const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+  if (carousel) {
+    start();
+    body.addEventListener('mouseenter', stop);   // 悬停暂停，方便阅读
+    body.addEventListener('mouseleave', start);
+    // 手动点击进度点跳转
+    if (dots) {
+      [...dots.children].forEach((d, i) => {
+        d.addEventListener('click', () => { stop(); goto(i); start(); });
+      });
+    }
+  }
 
   const dialog = h('div', { class: 'ann-dialog', role: 'dialog', 'aria-modal': 'true' }, [
     h('div', { class: 'ann-head' }, [
@@ -193,9 +238,10 @@ export function showAnnouncement(text) {
         h('span', { class: 'ann-ico', text: '📢' }),
         h('span', { text: '网站公告' }),
       ]),
-      h('button', { class: 'ann-x', html: '&times;', title: '关闭', onclick: close }),
+      h('button', { class: 'ann-x', html: '&times;', title: '关闭', 'aria-label': '关闭', onclick: close }),
     ]),
     body,
+    dots,
     h('div', { class: 'ann-foot' }, [
       h('button', { class: 'btn btn-ghost btn-sm', text: '不再提示', onclick: mute }),
       h('button', { class: 'btn btn-primary btn-sm', text: '我知道了', onclick: close }),
@@ -205,7 +251,20 @@ export function showAnnouncement(text) {
   const mask = h('div', { class: 'ann-mask' }, [dialog]);
   // 点遮罩空白处关闭
   mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+
+  // 关闭时务必清掉定时器，避免后台空转
+  const realClose = close;
+  const closeWrapped = () => { stop(); realClose(); };
+
   document.body.appendChild(mask);
   document.addEventListener('keydown', onKey);
+  // 把关闭按钮绑定替换为带清理的版本：
+  // （close 在闭包内被多处引用，这里通过覆盖事件的简单方式保证清理）
+  dialog.querySelector('.ann-x').onclick = closeWrapped;
+  [...dialog.querySelectorAll('.ann-foot .btn')].forEach((b, i) => {
+    if (i === 1) b.onclick = closeWrapped; // 「我知道了」
+  });
+  mask.addEventListener('click', (e) => { if (e.target === mask) closeWrapped(); });
+
   requestAnimationFrame(() => mask.classList.add('ann-in'));
 }

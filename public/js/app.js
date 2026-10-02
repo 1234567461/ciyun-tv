@@ -3,7 +3,7 @@
    ============================================================ */
 
 import { h, api, go, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor } from './util.js';
-import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn } from './components.js';
+import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn, showAnnouncement } from './components.js';
 import { Player, detectType } from './player.js';
 import { auth, avatarEl } from './auth.js';
 import { mountComments } from './comments.js';
@@ -39,6 +39,27 @@ async function boot() {
   renderFooter();
   window.addEventListener('hashchange', route);
   route();
+  // 公告弹窗：优先用监控服务下发的最新公告，回退站点设置里的 announcement
+  showAnnouncement(state.site && state.site.announcement);
+  syncRemoteAnnouncement();
+}
+
+/**
+ * 拉取公告并展示。
+ * 走主站自身的 /api/announcement 代理（由服务端转发到监控服务），
+ * 避免前端跨域问题；监控未部署时服务端回退本地公告。
+ * 公告不是核心功能，任何异常都静默跳过。
+ */
+async function syncRemoteAnnouncement() {
+  try {
+    const d = await api('/api/announcement');
+    const text = (d && d.announcement) || '';
+    if (text && text.trim() !== String((state.site && state.site.announcement) || '').trim()) {
+      showAnnouncement(text);
+    }
+  } catch {
+    /* 忽略：公告取不到不影响使用 */
+  }
 }
 
 /* ============================================================

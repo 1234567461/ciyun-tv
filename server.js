@@ -67,6 +67,29 @@ app.use((req, res, next) => {
 /* ============================================================
  * API：站点信息
  * ============================================================ */
+/**
+ * 公告代理：从配套监控服务拉取最新公告。
+ * 这样运营只需在监控端改一处，全站用户下次进入即可看到。
+ * 未部署监控 / 不可达时，回退站点设置里的 announcement，不影响主流程。
+ */
+app.get('/api/announcement', async (req, res) => {
+  const fallback = (store.settings && store.settings.announcement) || '';
+  const statusUrl = process.env.STATUS_URL || req.app.get('statusUrl');
+  if (!statusUrl) return res.json({ announcement: fallback, source: 'local' });
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    const r = await fetch(statusUrl.replace(/\/+$/, '') + '/api/announcement', { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!r.ok) throw new Error('status ' + r.status);
+    const d = await r.json();
+    const text = (d && d.announcement) || '';
+    return res.json({ announcement: text || fallback, source: text ? 'remote' : 'local' });
+  } catch {
+    return res.json({ announcement: fallback, source: 'local' });
+  }
+});
+
 app.get('/api/site', (req, res) => {
   const s = store.settings;
   res.json({

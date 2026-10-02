@@ -1,0 +1,31 @@
+{
+  "name": "ciyuan-tv",
+  "version": "1.0.0",
+  "description": "慈云影视 - 基于官方公开接口的开源影视聚合平台（点播 + 直播 + 搜索）",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "seed": "node scripts/seed.js"
+  },
+  "keywords": [
+    "iptv",
+    "cctv",
+    "video",
+    "hls",
+    "open-source"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "compression": "^1.7.4",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "hls.js": "^1.5.13"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

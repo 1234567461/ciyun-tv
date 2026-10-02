@@ -1,0 +1,77 @@
+/* ============================================================
+   慈云影视 · 弹幕
+   ============================================================ */
+
+.dm-layer {
+  position: absolute; inset: 0; overflow: hidden;
+  pointer-events: none; z-index: 8;
+}
+.dm-item {
+  position: absolute; left: 0; white-space: nowrap;
+  font-size: 19px; font-weight: 600; line-height: 1.3;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.8);
+  will-change: transform; padding: 0 2px;
+  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.dm-item.dm-scroll { top: 0; }
+.dm-item.dm-top, .dm-item.dm-bottom {
+  left: 50%; transform: translateX(-50%);
+  animation: dmFixed 4.2s ease-out forwards;
+}
+@keyframes dmFixed {
+  0% { opacity: 0; } 8% { opacity: 1; } 88% { opacity: 1; } 100% { opacity: 0; }
+}
+
+/* ---------------- 控制条 ---------------- */
+.dm-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; margin-top: 12px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.dm-toggle {
+  width: 38px; height: 30px; border-radius: 8px; flex: 0 0 auto;
+  font-size: 13px; font-weight: 700; color: var(--text-mute);
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--border);
+  transition: all .2s;
+}
+.dm-toggle.on { background: var(--primary); color: #fff; border-color: var(--primary); box-shadow: 0 4px 14px rgba(229,9,20,.4); }
+.dm-select {
+  height: 30px; padding: 0 8px; border-radius: 8px; font-size: 12.5px;
+  background: rgba(255, 255, 255, 0.07); color: var(--text);
+  border: 1px solid var(--border); outline: none; cursor: pointer;
+}
+.dm-colors { display: flex; gap: 5px; align-items: center; }
+.dm-color {
+  width: 20px; height: 20px; border-radius: 50%; flex: 0 0 auto;
+  border: 2px solid transparent; transition: transform .16s, border-color .16s;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.15);
+}
+.dm-color:hover { transform: scale(1.15); }
+.dm-color.on { border-color: #fff; transform: scale(1.18); }
+.dm-input-row { display: flex; gap: 8px; flex: 1; min-width: 200px; }
+.dm-input {
+  flex: 1; height: 34px; padding: 0 14px; border-radius: 9px; font-size: 13.5px;
+  background: rgba(0, 0, 0, 0.28); color: var(--text);
+  border: 1px solid var(--border); outline: none; font-family: inherit;
+  transition: border-color .2s;
+}
+[data-theme='light'] .dm-input { background: rgba(0,0,0,.04); }
+.dm-input:focus { border-color: var(--primary); }
+.dm-send {
+  padding: 0 18px; height: 34px; border-radius: 9px; font-size: 13.5px; font-weight: 600;
+  background: var(--primary); color: #fff; transition: background .2s, transform .16s;
+}
+.dm-send:hover { background: var(--primary-dark); transform: translateY(-1px); }
+.dm-login {
+  flex: 1; display: grid; place-items: center; height: 34px; border-radius: 9px;
+  background: rgba(229, 9, 20, 0.1); color: var(--accent); font-size: 13px; font-weight: 600;
+  border: 1px solid rgba(229, 9, 20, 0.25);
+}
+.dm-login:hover { background: rgba(229, 9, 20, 0.18); }
+
+@media (max-width: 720px) {
+  .dm-item { font-size: 16px; }
+  .dm-bar { padding: 9px 10px; gap: 8px; }
+  .dm-colors { display: none; }
+}

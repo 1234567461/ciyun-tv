@@ -1,0 +1,16 @@
+# 依赖
+node_modules/
+
+# 运行数据（含订单、用户、评论等本地数据，不入库）
+data/store.json
+data/*.bak
+
+# 日志与临时文件
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# 构建产物
+dist/
+build/

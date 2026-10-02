@@ -1,0 +1,29 @@
+/* ============================================================
+   慈云影视 · 后台 · 评论 / 用户 / 家庭
+   ============================================================ */
+
+.cm-manage { display: flex; flex-direction: column; gap: 12px; }
+.cm-card {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 18px; transition: border-color .2s;
+}
+.cm-card:hover { border-color: var(--border-hover); }
+.cm-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.cm-avatar {
+  width: 36px; height: 36px; border-radius: 50%; flex: 0 0 auto;
+  display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, var(--primary), #ff8a3d);
+}
+.cm-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.cm-meta { font-size: 11.5px; color: var(--text-mute); margin-top: 2px; }
+.cm-parent {
+  font-size: 12px; color: var(--text-mute); margin-bottom: 7px;
+  padding: 3px 10px; background: rgba(255, 255, 255, 0.04); border-radius: 6px; display: inline-block;
+}
+.cm-body { font-size: 14px; line-height: 1.7; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+.cm-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+.pager {
+  display: flex; align-items: center; justify-content: center; gap: 16px;
+  margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);
+}

@@ -32,6 +32,14 @@ const app = express();
 const PORT = process.env.PORT || 8811;
 const HOST = process.env.HOST || '0.0.0.0';
 
+/** 给 Promise 加截止时间：超时返回 fallback，避免可选环节拖垮整个接口 */
+function withDeadline(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 app.set('trust proxy', true); // 反向代理下取真实 IP（限流/锁定依赖）
 
 app.use(security.securityHeaders);
@@ -465,10 +473,13 @@ app.get('/api/live/:channel', async (req, res) => {
     const live = await cctv.getLive(req.params.channel);
     const ch = store.liveChannels.find((c) => c.id === req.params.channel);
     let now = live.now || null;
-    // 节目单缺失时兜底：单独再取一次当前频道实时节目
+    // 节目单缺失时兜底：单独再取一次当前频道实时节目。
+    // ⚡ 必须走缓存且带截止时间 —— 原来用 skipCache:true 会实时抓央视网页，
+    //    上游一慢就把接口拖到 6~8s（表现为直播页偶发卡死）。
+    //    节目单一期也就几十秒粒度，缓存足够；拿不到就算了，不能拖累出流。
     if (!now) {
       try {
-        const cur = await cctv.getNowEpg([req.params.channel], { skipCache: true });
+        const cur = await withDeadline(cctv.getNowEpg([req.params.channel]), 2000, null);
         now = (cur && cur[0]) || null;
       } catch { /* 忽略 */ }
     }
@@ -3681,7 +3692,37 @@ if (require.main === module) {
     console.log(`  │  账号      admin / admin888                    │`);
     console.log('  └───────────────────────────────────────────────┘');
     console.log('');
+    warmupLive();
   });
+}
+
+/**
+ * 直播源后台预热
+ * ------------------------------------------------------------
+ * 冷启动时首次访问某频道要实时探测候选源（实测可达 6s+），
+ * 用户在页面就会干等。这里在服务启动后于后台静默预热全部频道，
+ * 等用户点进来时已命中缓存 → 毫秒级出流。
+ * 全程静默，失败不影响主流程；错峰执行，避免瞬间打满上游。
+ */
+function warmupLive() {
+  const chs = (store.liveChannels || []).map((c) => c.id).filter(Boolean);
+  if (!chs.length) return;
+  const CONCURRENCY = 3;
+  let idx = 0;
+  let done = 0;
+
+  const next = () => {
+    if (idx >= chs.length) {
+      console.log(`  [预热] 直播源就绪：${done}/${chs.length} 个频道`);
+      return;
+    }
+    const ch = chs[idx++];
+    cctv.getLive(ch)
+      .then(() => { done++; })
+      .catch(() => {})
+      .finally(() => setTimeout(next, 400)); // 错峰，别把上游打满
+  };
+  for (let i = 0; i < CONCURRENCY; i++) next();
 }
 
 module.exports = app;

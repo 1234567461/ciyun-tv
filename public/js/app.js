@@ -910,8 +910,10 @@ async function pageLiveRoom(root, chId) {
 
   if (live.playable) {
     const p = new Player(host, {
-      // ⚠️ 接口返回的字段是 hls / flv（不是 src / flvSrc）——
-      //    原先误判字段名导致 lines 恒为空数组，播放器无源可播、页面一直转圈。
+      // 字段兼容（历史上出过 bug：只认 src/flvSrc，而某些响应只有 hls/flv）：
+      //   · 优先用 src/flvSrc —— 接口已包装成 /api/stream 代理地址，
+      //     走代理能统一注入 CODECS、规避跨域与 Referer 限制，最稳
+      //   · 回退到 hls/flv 原始地址 —— 保证任何响应形态下都有源可播
       lines: [
         (live.src || live.hls) ? { name: 'HLS 线路', type: 'hls', src: live.src || live.hls, url: live.src || live.hls } : null,
         (live.flvSrc || live.flv) ? { name: 'FLV 线路', type: 'flv', src: live.flvSrc || live.flv, url: live.flvSrc || live.flv } : null,

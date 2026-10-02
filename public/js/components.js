@@ -127,3 +127,85 @@ export function loadMoreBtn(onClick) {
     h('button', { class: 'btn btn-ghost', text: '加载更多', onclick: (e) => onClick(e) }),
   ]);
 }
+
+/* ============================================================
+   公告弹窗
+   ------------------------------------------------------------
+   · 站点设置里的 announcement 字段支持多行，每行作为一条公告
+   · 用内容哈希做版本号：公告改了会重新弹出，没改则不打扰
+   · 支持「本次关闭」与「不再提示」（localStorage 记录）
+   ============================================================ */
+
+const ANN_KEY = 'cy_announce_seen';   // 已读公告的内容指纹
+const ANN_OFF = 'cy_announce_muted';  // 用户点了「不再提示」
+
+/** 简易稳定哈希（公告内容 → 指纹），用于判断公告是否变更 */
+function hashStr(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/**
+ * 展示公告弹窗（若有新公告且用户未选择「不再提示」）
+ * @param {string} text 公告正文（支持 \n 分行）
+ */
+export function showAnnouncement(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return;
+
+  const items = raw.split('\n').map((s) => s.trim()).filter(Boolean);
+  if (!items.length) return;
+
+  const fingerprint = hashStr(raw);
+  let muted = false, seen = '';
+  try {
+    muted = localStorage.getItem(ANN_OFF) === '1';
+    seen = localStorage.getItem(ANN_KEY) || '';
+  } catch { /* 隐私模式忽略 */ }
+  if (muted || seen === fingerprint) return; // 已读或已静音 → 不打扰
+
+  const close = () => {
+    try { localStorage.setItem(ANN_KEY, fingerprint); } catch {}
+    mask.classList.add('ann-out');
+    setTimeout(() => mask.remove(), 220);
+    document.removeEventListener('keydown', onKey);
+  };
+  const mute = () => {
+    try { localStorage.setItem(ANN_OFF, '1'); localStorage.setItem(ANN_KEY, fingerprint); } catch {}
+    close();
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  const body = h('div', { class: 'ann-body' });
+  items.forEach((line, i) => {
+    body.appendChild(
+      h('div', { class: 'ann-item' }, [
+        h('span', { class: 'ann-dot', text: String(i + 1) }),
+        h('span', { class: 'ann-text', text: line }),
+      ])
+    );
+  });
+
+  const dialog = h('div', { class: 'ann-dialog', role: 'dialog', 'aria-modal': 'true' }, [
+    h('div', { class: 'ann-head' }, [
+      h('div', { class: 'ann-title' }, [
+        h('span', { class: 'ann-ico', text: '📢' }),
+        h('span', { text: '网站公告' }),
+      ]),
+      h('button', { class: 'ann-x', html: '&times;', title: '关闭', onclick: close }),
+    ]),
+    body,
+    h('div', { class: 'ann-foot' }, [
+      h('button', { class: 'btn btn-ghost btn-sm', text: '不再提示', onclick: mute }),
+      h('button', { class: 'btn btn-primary btn-sm', text: '我知道了', onclick: close }),
+    ]),
+  ]);
+
+  const mask = h('div', { class: 'ann-mask' }, [dialog]);
+  // 点遮罩空白处关闭
+  mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+  document.body.appendChild(mask);
+  document.addEventListener('keydown', onKey);
+  requestAnimationFrame(() => mask.classList.add('ann-in'));
+}

@@ -323,6 +323,31 @@
 .ann-body { padding: 18px 20px; overflow-y: auto; flex: 1; }
 .ann-item { display: flex; gap: 11px; margin-bottom: 13px; align-items: flex-start; }
 .ann-item:last-child { margin-bottom: 0; }
+
+/* 多条公告：切换式轮播（单条时以上样式即为静态列表） */
+.ann-scroll { overflow: hidden; }
+.ann-scroll .ann-track { position: relative; }
+.ann-scroll .ann-item {
+  display: none; margin-bottom: 0;
+  animation: ann-fade .32s ease both;
+}
+.ann-scroll .ann-item.on { display: flex; }
+@keyframes ann-fade {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.ann-dots {
+  display: flex; justify-content: center; align-items: center; gap: 7px;
+  padding: 2px 20px 12px;
+}
+.ann-dots i {
+  width: 7px; height: 7px; border-radius: 50%; cursor: pointer;
+  background: var(--border, rgba(255,255,255,.18));
+  transition: background .2s, transform .2s;
+}
+.ann-dots i:hover { background: rgba(255,255,255,.34); }
+.ann-dots i.on { background: #e50914; transform: scale(1.35); }
 .ann-dot {
   flex: none; width: 20px; height: 20px; border-radius: 50%; margin-top: 1px;
   display: grid; place-items: center; font-size: 11px; font-weight: 600;

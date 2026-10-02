@@ -192,6 +192,9 @@ function buildUserArea() {
     monetize.enabled ? h('a', { href: '#/vip', html: '💎<span>会员中心</span>', onclick: () => close() }) : null,
     monetize.enabled ? h('a', { href: '#/vip?tab=orders', html: '🧾<span>我的订单</span>', onclick: () => close() }) : null,
     h('a', { href: '#/profile?tab=comments', html: '💬<span>我的评论</span>', onclick: () => close() }),
+    h('a', { href: '#/social?tab=friends', html: '👥<span>好友</span>', onclick: () => close() }),
+    h('a', { href: '#/social?tab=requests', html: '📨<span>好友申请</span>', onclick: () => close() }),
+    h('a', { href: '#/social', html: '💌<span>我的私信</span>', onclick: () => close() }),
     h('a', { href: '#/fav', html: '⭐<span>我的收藏</span>', onclick: () => close() }),
     h('a', { href: '#/history', html: '🕘<span>观看历史</span>', onclick: () => close() }),
     h('button', { class: 'danger', html: '🚪<span>退出登录</span>', onclick: async () => { await auth.logout(); toast('已退出登录'); renderHeader(); route(); } }),
@@ -208,8 +211,31 @@ function buildUserArea() {
     if (willOpen) setTimeout(() => document.addEventListener('click', onDoc), 0);
   };
   if (vipEntry) area.appendChild(vipEntry);
+
+  // 社交入口（私信 + 好友申请，带未读红点）
+  const soc = h('a', {
+    class: 'icon-btn soc-entry',
+    href: '#/social',
+    title: '私信 / 好友',
+    html: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
+  });
+  area.appendChild(soc);
+  refreshSocialBadge(soc);
+
   area.appendChild(wrap);
   return area;
+}
+
+/** 拉取社交总览，有未读消息/好友申请时在入口上显示红点 */
+async function refreshSocialBadge(el) {
+  if (!auth.loggedIn || !el || !el.isConnected) return;
+  try {
+    const d = await api('/api/social/summary');
+    const n = (d && (d.unread || 0) + (d.requests || 0)) || 0;
+    const old = el.querySelector('.soc-badge');
+    if (old) old.remove();
+    if (n > 0) el.appendChild(h('i', { class: 'soc-badge', text: n > 99 ? '99+' : String(n) }));
+  } catch { /* 未登录/网络异常时静默 */ }
 }
 
 function markActive() {

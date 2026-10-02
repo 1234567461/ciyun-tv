@@ -66,6 +66,16 @@
 .icon-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
 .icon-btn.on { color: var(--primary); }
 
+/* 社交入口未读红点 */
+.soc-entry { position: relative; }
+.soc-badge {
+  position: absolute; top: 3px; right: 3px; min-width: 16px; height: 16px;
+  padding: 0 4px; border-radius: 9px; background: var(--primary, #e50914);
+  color: #fff; font-size: 10.5px; font-weight: 700; font-style: normal;
+  line-height: 16px; text-align: center; box-shadow: 0 0 0 2px var(--bg, #0b0b12);
+  pointer-events: none;
+}
+
 /* ============================ Hero 轮播 ============================ */
 .hero {
   position: relative; height: 78vh; min-height: 520px; max-height: 780px;

@@ -103,9 +103,12 @@ export function renderVipPage(root, site, opts = {}) {
         ]),
         h('div', { class: 'vh-right' }, [
           h('div', { class: 'vh-wallet' }, [
-            h('div', { class: 'w-k', text: '账户额度' }),
-            h('div', { class: 'w-v admin', text: '∞ 无限' }),
-            h('div', { class: 'w-note', text: '特权账号' }),
+            h('div', { class: 'w-k', text: '观看次数' }),
+            h('div', { class: 'w-v admin', text: '∞' }),
+          ]),
+          h('div', { class: 'vh-wallet' }, [
+            h('div', { class: 'w-k', text: '通用点数' }),
+            h('div', { class: 'w-v admin', text: '∞' }),
           ]),
         ]),
       ]);
@@ -113,6 +116,7 @@ export function renderVipPage(root, site, opts = {}) {
 
     const active = v.active;
     const expireText = v.expire ? new Date(v.expire).toLocaleDateString('zh-CN') : '';
+    const q = v.quota || {};
 
     return h('div', { class: 'vip-hero' + (active ? ' active' : '') }, [
       h('div', { class: 'vh-left' }, [
@@ -133,6 +137,18 @@ export function renderVipPage(root, site, opts = {}) {
         ]),
       ]),
       h('div', { class: 'vh-right' }, [
+        quotaEnabled()
+          ? h('div', { class: 'vh-wallet' }, [
+              h('div', { class: 'w-k', text: '观看次数' }),
+              h('div', { class: 'w-v', text: q.timesText || '0' }),
+            ])
+          : null,
+        quotaEnabled()
+          ? h('div', { class: 'vh-wallet' }, [
+              h('div', { class: 'w-k', text: '通用点数' }),
+              h('div', { class: 'w-v', text: q.pointsText || '0' }),
+            ])
+          : null,
         h('div', { class: 'vh-wallet' }, [
           h('div', { class: 'w-k', text: '账户余额' }),
           h('div', { class: 'w-v', text: cur + (v.balance || 0).toFixed(2) }),
@@ -164,11 +180,13 @@ export function renderVipPage(root, site, opts = {}) {
     const tabs = isAdm
       ? [
           { id: 'plans', label: '🛡️ 特权说明' },
+          quotaEnabled() ? { id: 'quota', label: '🎟️ 我的额度' } : null,
           { id: 'redeem', label: '🎁 兑换码' },
           { id: 'orders', label: '🧾 我的订单' },
-        ]
+        ].filter(Boolean)
       : [
           { id: 'plans', label: '💎 开通会员' },
+          quotaEnabled() ? { id: 'quota', label: '🎟️ 我的额度' } : null,
           info_allowBalance() ? { id: 'recharge', label: '💰 余额充值' } : null,
           info_redeemEnabled() ? { id: 'redeem', label: '🎁 兑换码' } : null,
           { id: 'orders', label: '🧾 我的订单' },
@@ -192,12 +210,15 @@ export function renderVipPage(root, site, opts = {}) {
       const label = b.textContent;
       const id = label.includes('开通') || label.includes('特权')
         ? 'plans'
-        : label.includes('充值') ? 'recharge' : label.includes('兑换') ? 'redeem' : 'orders';
+        : label.includes('额度') ? 'quota'
+        : label.includes('充值') ? 'recharge'
+        : label.includes('兑换') ? 'redeem' : 'orders';
       b.classList.toggle('on', id === state.tab);
     });
   }
   const info_allowBalance = () => !!(state.info && state.info.allowBalance !== false);
   const info_redeemEnabled = () => !!(state.info && state.info.redeemEnabled !== false);
+  const quotaEnabled = () => !!(state.info && state.info.quotaEnabled);
 
   /* -------------------- Tab 内容分发 -------------------- */
   let panel = null;
@@ -205,9 +226,111 @@ export function renderVipPage(root, site, opts = {}) {
     panel = p;
     panel.innerHTML = '';
     if (state.tab === 'plans') renderPlans(panel);
+    else if (state.tab === 'quota') renderQuota(panel);
     else if (state.tab === 'recharge') renderRecharge(panel);
     else if (state.tab === 'redeem') renderRedeem(panel);
     else renderOrders(panel);
+  }
+
+  /* ==================== 我的额度 ==================== */
+  async function renderQuota(panel) {
+    if (!auth.loggedIn) {
+      panel.appendChild(h('div', { class: 'vip-login-tip' }, [
+        h('span', { text: '🔒 登录后可查看额度' }),
+        h('a', { class: 'btn btn-primary btn-sm', href: '#/login?redirect=' + encodeURIComponent('#/vip?tab=quota'), text: '去登录' }),
+      ]));
+      return;
+    }
+    const box = h('div', { class: 'quota-wrap' }, [h('div', { class: 'quota-loading', text: '加载中…' })]);
+    panel.appendChild(box);
+
+    let d;
+    try {
+      d = await api('/api/quota');
+    } catch (e) {
+      box.innerHTML = '';
+      box.appendChild(h('div', { class: 'empty' }, [h('div', { class: 'ico', text: '⚠️' }), h('div', { class: 't', text: e.message || '加载失败' })]));
+      return;
+    }
+    box.innerHTML = '';
+    const q = d.quota || {};
+    const rules = d.rules || {};
+    const costs = rules.pointCosts || {};
+    const cur = d.currency || '¥';
+    const isUnl = q.unlimited || q.isAdmin || q.isVip;
+
+    // —— 额度卡片 ——
+    const stat = (k, v, sub, cls) => h('div', { class: 'quota-item' + (cls ? ' ' + cls : '') }, [
+      h('div', { class: 'qi-k', text: k }),
+      h('div', { class: 'qi-v', text: v }),
+      sub ? h('div', { class: 'qi-sub', text: sub }) : null,
+    ]);
+
+    const freeText = q.freeDaily === -1
+      ? '会员免额度'
+      : q.freeDaily > 0
+        ? `今日剩 ${Math.max(0, q.freeRemain)}/${q.freeDaily} 部`
+        : '未开启免费额度';
+
+    box.appendChild(h('div', { class: 'quota-grid' }, [
+      stat('观看次数', q.timesText !== undefined ? q.timesText : String(q.times || 0), '可用「次」额度 ' + freeText, 'q-times'),
+      stat('通用点数', q.pointsText !== undefined ? q.pointsText : String(q.points || 0), '用于超清 / 下载 / 去广告'),
+    ]));
+
+    box.appendChild(h('div', { class: 'quota-usage' }, [
+      h('span', { text: `累计观看消耗 ${q.usedPlays || 0} 次` }),
+      h('span', { text: `累计点数消耗 ${q.usedPoints || 0} 点` }),
+      isUnl ? h('span', { class: 'unl', text: '♾ 当前享有豁免' }) : null,
+    ]));
+
+    // —— 点数消耗表 ——
+    box.appendChild(h('div', { class: 'quota-cost-card' }, [
+      h('h3', { text: '💡 点数消耗规则' }),
+      h('div', { class: 'qc-list' }, [
+        h('div', { class: 'qc-row' }, [h('span', { text: '超清画质' }), h('b', { text: costs.hd + ' 点 / 次' })]),
+        h('div', { class: 'qc-row' }, [h('span', { text: '下载影片' }), h('b', { text: costs.download + ' 点 / 次' })]),
+        h('div', { class: 'qc-row' }, [h('span', { text: '去广告' }), h('b', { text: costs.noAd + ' 点 / 次' })]),
+        h('div', { class: 'qc-row' }, [h('span', { text: '纯点数看片' }), h('b', { text: costs.play + ' 点 / 部' })]),
+      ]),
+      h('div', { class: 'qc-acts' }, [
+        d.redeemEnabled
+          ? h('button', { class: 'btn btn-primary btn-sm', text: '🎁 兑换码充值', onclick: () => { state.tab = 'redeem'; refreshTabs(); renderTab(panel); } })
+          : null,
+        h('button', { class: 'btn btn-ghost btn-sm', text: '💎 开通会员免额度', onclick: () => { state.tab = 'plans'; refreshTabs(); renderTab(panel); } }),
+      ]),
+    ]));
+
+    // —— 额度流水 ——
+    const logCard = h('div', { class: 'quota-log-card' }, [h('h3', { text: '📜 额度明细' })]);
+    box.appendChild(logCard);
+    try {
+      const lg = await api('/api/quota/log?size=20');
+      if (!lg.list || !lg.list.length) {
+        logCard.appendChild(h('div', { class: 'empty small' }, [h('div', { class: 't', text: '暂无额度变动记录' })]));
+      } else {
+        const list = h('div', { class: 'ql-list' });
+        lg.list.forEach((x) => {
+          const isTimes = x.type === 'times';
+          const deltaTxt = x.delta === null ? String(x.after ?? '-') : (x.delta > 0 ? '+' + x.delta : String(x.delta));
+          list.appendChild(h('div', { class: 'ql-item' }, [
+            h('div', { class: 'ql-left' }, [
+              h('div', { class: 'ql-reason', text: x.reason || '额度变动' }),
+              h('div', { class: 'ql-time', text: new Date(x.createdAt).toLocaleString('zh-CN') }),
+            ]),
+            h('div', { class: 'ql-right' }, [
+              h('span', { class: 'ql-dim', text: isTimes ? '次' : '点' }),
+              h('span', {
+                class: 'ql-delta ' + (x.delta > 0 ? 'up' : x.delta < 0 ? 'down' : 'flat'),
+                text: deltaTxt,
+              }),
+            ]),
+          ]));
+        });
+        logCard.appendChild(list);
+      }
+    } catch (e) {
+      logCard.appendChild(h('div', { class: 'empty small' }, [h('div', { class: 't', text: '明细加载失败' })]));
+    }
   }
 
   /* ==================== 套餐列表 ==================== */
@@ -604,21 +727,28 @@ export function renderVipPage(root, site, opts = {}) {
       }
     }
 
-    panel.appendChild(
-      h('div', { class: 'redeem-card' }, [
-        h('div', { class: 'rd-ico', text: '🎁' }),
-        h('h3', { text: '兑换码充值' }),
-        h('p', { text: '输入有效的兑换码，即可获得会员时长或账户余额' }),
-        h('div', { class: 'rd-row' }, [input, btn]),
-        h('div', { class: 'rd-tips' }, [
-          h('div', { text: '· 兑换码不区分大小写，可不输入横线' }),
-          h('div', { text: '· 每个兑换码仅可使用一次，使用后立即失效' }),
-          h('div', { text: '· 兑换获得的会员时长会自动叠加到现有会员上' }),
-          h('div', { text: '· 如有兑换问题，请联系站点管理员' }),
-        ]),
-      ])
-    );
-  }
+  panel.appendChild(
+    h('div', { class: 'redeem-card' }, [
+      h('div', { class: 'rd-ico', text: '🎁' }),
+      h('h3', { text: '兑换码充值' }),
+      h('p', { text: '输入有效的兑换码，即可获得会员时长、账户余额、观看次数或通用点数' }),
+      h('div', { class: 'rd-row' }, [input, btn]),
+      h('div', { class: 'rd-kinds' }, [
+        h('span', { class: 'rk', text: '💎 会员时长' }),
+        h('span', { class: 'rk', text: '💰 账户余额' }),
+        h('span', { class: 'rk', text: '🎟️ 观看次数' }),
+        h('span', { class: 'rk', text: '⭐ 通用点数' }),
+      ]),
+      h('div', { class: 'rd-tips' }, [
+        h('div', { text: '· 兑换码不区分大小写，可不输入横线' }),
+        h('div', { text: '· 每个兑换码仅可使用一次，使用后立即失效' }),
+        h('div', { text: '· 兑换获得的会员时长会自动叠加到现有会员上' }),
+        h('div', { text: '· 观看次数与通用点数会累加到当前额度，可在「我的额度」查看' }),
+        h('div', { text: '· 如有兑换问题，请联系站点管理员' }),
+      ]),
+    ])
+  );
+}
 
   /* ==================== 订单记录 ==================== */
   async function renderOrders(panel) {

@@ -160,6 +160,21 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
 .empty { text-align: center; padding: 50px 20px; color: var(--text-mute); }
 .empty .i { font-size: 40px; margin-bottom: 12px; opacity: .5; }
 
+/* 家庭设置：三栏配置 */
+.cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 26px; }
+.cfg-col h4 {
+  font-size: 13px; font-weight: 750; color: var(--text-dim); letter-spacing: .4px;
+  margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.cfg-col .switch-row { padding: 9px 0; }
+.cfg-col .field label { font-size: 12.5px; }
+.cfg-col select {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 13px; padding: 8px 11px; font-family: inherit;
+  width: 100%; max-width: 220px; cursor: pointer;
+}
+.cfg-col select:hover { border-color: var(--border-hover); }
+
 @media (max-width: 900px) {
   .side { width: 64px; padding: 18px 8px; }
   .side-logo span, .side-item span.lbl { display: none; }

@@ -24,7 +24,7 @@ const sources = require('./lib/sources');
 const account = require('./lib/account');
 const chat = require('./lib/chat');
 const pay = require('./lib/pay');
-const { store } = require('./lib/store');
+const { store, REDEEM_TYPES, FAMILY_ROLES, FAMILY_ROLE_NAME, FAMILY_ROLE_PERMS } = require('./lib/store');
 
 const app = express();
 const PORT = process.env.PORT || 8811;
@@ -65,6 +65,16 @@ app.get('/api/site', (req, res) => {
       allowBalance: s.monetize.allowBalance !== false,
       redeemEnabled: s.monetize.redeemEnabled !== false,
       adminUnlimited: s.monetize.adminUnlimited !== false,
+      quotaEnabled: !!s.monetize.quotaEnabled,
+      quotaRules: {
+        requireLogin: s.monetize.requireLogin !== false,
+        freeDailyPlays: Math.max(0, Number(s.monetize.freeDailyPlays) || 0),
+        costPerPlay: Math.max(1, Number(s.monetize.costPerPlay) || 1),
+        dedupeDaily: s.monetize.dedupeDaily !== false,
+        vipFreePlays: s.monetize.vipFreePlays !== false,
+        allowPointsForPlay: s.monetize.allowPointsForPlay !== false,
+        pointCosts: s.monetize.pointCosts || {},
+      },
       minRecharge: s.monetize.minRecharge || 1,
       rechargePresets: s.monetize.rechargePresets || [10, 30, 50, 100, 200, 500],
       orderTimeout: s.monetize.orderTimeout || 30,
@@ -177,8 +187,110 @@ app.get('/api/home', async (req, res) => {
 /* ============================================================
  * API：播放
  * ============================================================ */
+
+/** 家庭并发流会话（内存，2 分钟无心跳自动过期） */
+const familyStreams = new Map();
+
 app.get('/api/video/:guid', async (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const u = currentUser(req);
   try {
+    // ---- 家庭：并发流限制 + 额度池兜底（对标 Jellyfin MaxActiveVideoStreams / Plex 并发流）----
+    const famCfg = store.settings.family || {};
+    let famInfo = null;
+    if (u && famCfg.enabled !== false) {
+      const fam = store.findFamilyOf(u.account);
+      if (fam && fam.owner !== u.account) {
+        // 并发流限制
+        const limit = famCfg.maxStreams === undefined ? 2 : Number(famCfg.maxStreams);
+        if (limit > 0) {
+          const sessKey = 'fam:' + fam.id + ':' + u.account;
+          const cur = familyStreams.get(sessKey) || [];
+          const live = cur.filter((s) => Date.now() - s.at < 120000); // 2 分钟无心跳视为结束
+          if (live.length >= limit) {
+            if ((famCfg.streamPolicy || 'replace') === 'block') {
+              return res.status(429).json({
+                error: `同时在线观看数已达上限（最多 ${limit} 路），请先关闭其他设备`,
+                needStream: true, streamLimit: limit, active: live.length,
+                sessions: live.map((s) => ({ device: s.device, at: s.at })),
+              });
+            }
+            // replace：顶掉最早的一路
+            live.sort((a, b) => a.at - b.at);
+            live.shift();
+          }
+          live.push({ at: Date.now(), device: String(req.headers['x-device-id'] || '').slice(0, 64) });
+          familyStreams.set(sessKey, live.slice(-10));
+        }
+        famInfo = { id: fam.id, role: myFamilyRole(fam, u.account) };
+      }
+    }
+
+    // ---- 额度网关（付费模块 + 额度系统双开关开启时才生效）----
+    let gate = null;
+    if (cfg.enabled && cfg.quotaEnabled) {
+      gate = pay.gateWatch(u, {
+        guid: req.params.guid, cfg,
+        isVip: u ? isVip(u) : false,
+        isAdmin: u ? isAdminAccount(u.account) : false,
+      });
+      if (!gate.allow) {
+        // 家庭额度池兜底：成员额度耗尽时消耗户主共享池
+        if (u && famInfo && famCfg.shareQuota !== false && gate.needRecharge) {
+          const fam = store.getFamily(famInfo.id);
+          const poolRemain = fam
+            ? ((Number(fam.quotaPool) || 0) === -1
+              ? -1 : Math.max(0, (Number(fam.quotaPool) || 0) - (Number(fam.poolUsed) || 0)))
+            : 0;
+          if (poolRemain !== 0) {
+            const used = store.useFamilyQuota(fam.id, gate.cost || 0);
+            if (used !== 0) {
+              store.addQuotaLog({
+                account: u.account, type: 'family', delta: -(gate.cost || 0),
+                reason: '消耗家庭共享额度池', ref: req.params.guid,
+              });
+              gate = { ...gate, allow: true, source: 'family', cost: gate.cost || 0 };
+            }
+          }
+        }
+        if (!gate.allow) {
+          return res.status(gate.needLogin ? 401 : 403).json({
+            error: gate.error,
+            needQuota: true,
+            needLogin: !!gate.needLogin,
+            needVip: !!gate.needVip,
+            needRecharge: !!gate.needRecharge,
+            quota: gate.quota,
+            redeemEnabled: cfg.redeemEnabled !== false,
+            quotaEnabled: true,
+            familyPool: famInfo ? true : false,
+          });
+        }
+      }
+      // 同步落库扣减（在 await 之前完成，杜绝并发超扣）
+      if (u && ['free', 'times', 'points'].includes(gate.source)) {
+        store.commitWatch(u.account, {
+          guid: req.params.guid,
+          source: gate.source,
+          cost: gate.cost,
+          dayKey: gate.dayKey,
+          dayUsed: gate.dayUsed,
+        });
+        if (gate.cost > 0) {
+          store.addQuotaLog({
+            account: u.account,
+            type: gate.source === 'points' ? 'points' : 'times',
+            delta: -gate.cost,
+            reason: '观看影片消耗',
+            ref: req.params.guid,
+            after: pay.ensureQuota(store.findUser(u.account))[
+              gate.source === 'points' ? 'points' : 'times'
+            ],
+          });
+        }
+      }
+    }
+
     const info = await cctv.getPlayInfo(req.params.guid);
     store.recordPlay(req.params.guid, { title: info.title });
     res.json({
@@ -187,6 +299,9 @@ app.get('/api/video/:guid', async (req, res) => {
       src: info.hls ? `/api/stream?url=${encodeURIComponent(info.hls)}` : '',
       // 多线路：主 HLS + 加密 HLS + FLV
       lines: buildLines(info),
+      // 额度回显（前端展示剩余）
+      quota: pay.quotaView(u, { cfg, isAdmin: u ? isAdminAccount(u.account) : false, isVip: u ? isVip(u) : false }),
+      quotaSource: gate ? gate.source : null,
     });
   } catch (e) {
     res.status(502).json({ error: 'play info failed', message: e.message });
@@ -528,6 +643,17 @@ app.post('/api/admin/login', (req, res) => {
   res.json({ ok: true, token });
 });
 
+/** 测试辅助：仅非生产环境可用的会员授予（供 scripts/test-*.js 使用） */
+app.post('/api/admin/test/grant-vip', requireAdmin, (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(403).json({ error: '生产环境已禁用' });
+  const { account: acc, days } = req.body || {};
+  const u = store.findUser(String(acc || '').toLowerCase());
+  if (!u) return res.status(404).json({ error: '用户不存在' });
+  const vip = pay.grantVip(u, { id: 'test', name: '测试会员', days: Math.max(1, parseInt(days, 10) || 30) });
+  store.upsertUser(u);
+  res.json({ ok: true, vip });
+});
+
 app.post('/api/admin/logout', (req, res) => {
   const token = req.cookies && req.cookies['cy_token'];
   if (token) store.delSession(token);
@@ -624,10 +750,22 @@ app.put('/api/admin/community', requireAdmin, (req, res) => {
 app.put('/api/admin/family', requireAdmin, (req, res) => {
   const b = req.body || {};
   const patch = {};
-  for (const k of ['enabled', 'requireVip', 'allowLeave', 'shareVip']) {
+  for (const k of ['enabled', 'requireVip', 'allowLeave', 'shareVip', 'shareQuota',
+    'autoApprove', 'parentalEnabled', 'childBlockVip', 'childBlockComment']) {
     if (b[k] !== undefined) patch[k] = !!b[k];
   }
   if (b.maxMembers !== undefined) patch.maxMembers = Math.max(1, Math.min(20, parseInt(b.maxMembers, 10) || 5));
+  // -1 表示不限；0 表示关闭限制
+  if (b.maxStreams !== undefined) patch.maxStreams = Math.max(-1, Math.min(20, parseInt(b.maxStreams, 10) || 0));
+  if (b.deviceLimit !== undefined) patch.deviceLimit = Math.max(0, Math.min(50, parseInt(b.deviceLimit, 10) || 0));
+  if (['replace', 'block'].includes(b.streamPolicy)) patch.streamPolicy = b.streamPolicy;
+  if (b.familyQuotaPool !== undefined) {
+    const n = Math.trunc(Number(b.familyQuotaPool) || 0);
+    patch.familyQuotaPool = n === -1 ? -1 : Math.max(0, Math.min(1000000, n));
+  }
+  if (b.inviteTtlDays !== undefined) patch.inviteTtlDays = Math.max(1, Math.min(30, parseInt(b.inviteTtlDays, 10) || 3));
+  if (FAMILY_ROLES.includes(b.inviteRole) && b.inviteRole !== 'owner') patch.inviteRole = b.inviteRole;
+  if (['G', 'PG', 'PG13', 'R', 'UNRATED'].includes(b.childMaxRating)) patch.childMaxRating = b.childMaxRating;
   store.setSettings({ family: patch });
   res.json(store.settings.family);
 });
@@ -713,7 +851,7 @@ function publicUser(u) {
     isAdmin: isAdm,
     adminPrivilege: isAdm,
     unlimited: isAdm,
-    quota: isAdm ? 'unlimited' : null,
+    quota: pay.quotaView(u, { cfg, isAdmin: isAdm, isVip: own }),
     balance: isAdm ? null : Math.round(((u.balance || 0)) * 100) / 100,
     currency: cfg.currency || '¥',
     stats: {
@@ -1118,7 +1256,7 @@ function vipView(u) {
       daysLeft: 36500,
       since: 0,
       balance: null,
-      quota: 'unlimited',
+      quota: pay.quotaView(u, { cfg, isAdmin: true, isVip: true }),
       currency: cfg.currency || '¥',
       mode: cfg.mode || 'optional',
     };
@@ -1140,6 +1278,7 @@ function vipView(u) {
     daysLeft: own ? pay.vipDaysLeft(u) : 0,
     since: own ? u.vip.since || null : null,
     balance: money((u && u.balance) || 0),
+    quota: pay.quotaView(u, { cfg, isAdmin: false, isVip: active }),
     currency: cfg.currency || '¥',
     mode: cfg.mode || 'optional',
   };
@@ -1163,6 +1302,17 @@ app.get('/api/vip/info', (req, res) => {
     orderTimeout: cfg.orderTimeout || 30,
     isAdmin: !!(u && isAdminAccount(u.account)),
     adminNote: u && isAdminAccount(u.account) ? '管理员账号享有终身会员与无限额度' : '',
+    // —— 额度系统 ——
+    quotaEnabled: !!cfg.quotaEnabled,
+    quotaRules: {
+      requireLogin: cfg.requireLogin !== false,
+      freeDailyPlays: Math.max(0, Number(cfg.freeDailyPlays) || 0),
+      costPerPlay: Math.max(1, Number(cfg.costPerPlay) || 1),
+      dedupeDaily: cfg.dedupeDaily !== false,
+      vipFreePlays: cfg.vipFreePlays !== false,
+      allowPointsForPlay: cfg.allowPointsForPlay !== false,
+      pointCosts: cfg.pointCosts || {},
+    },
     plans: (cfg.plans || []).map((p) => ({
       ...p,
       // 省多少钱
@@ -1172,6 +1322,82 @@ app.get('/api/vip/info', (req, res) => {
     payMethods: pay.payMethods(cfg),
     vip: u ? vipView(u) : null,
     loggedIn: !!u,
+  });
+});
+
+/** ============ 额度（观看次数 / 通用点数） ============ */
+
+/** 我的额度 */
+app.get('/api/quota', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const isAdm = isAdminAccount(u.account);
+  const v = pay.quotaView(u, { cfg, isAdmin: isAdm, isVip: isVip(u) });
+  res.json({
+    ok: true,
+    enabled: !!cfg.quotaEnabled,
+    quota: v,
+    rules: {
+      requireLogin: cfg.requireLogin !== false,
+      freeDailyPlays: Math.max(0, Number(cfg.freeDailyPlays) || 0),
+      costPerPlay: Math.max(1, Number(cfg.costPerPlay) || 1),
+      dedupeDaily: cfg.dedupeDaily !== false,
+      vipFreePlays: cfg.vipFreePlays !== false,
+      allowPointsForPlay: cfg.allowPointsForPlay !== false,
+      pointCosts: cfg.pointCosts || {},
+    },
+    redeemEnabled: cfg.redeemEnabled !== false,
+    currency: cfg.currency || '¥',
+  });
+});
+
+/** 额度流水 */
+app.get('/api/quota/log', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const { page = 1, size = 20 } = req.query;
+  const all = store.getQuotaLog(u.account, 500);
+  const p = Math.max(1, parseInt(page, 10) || 1);
+  const s = Math.min(100, parseInt(size, 10) || 20);
+  res.json({ total: all.length, page: p, size: s, list: all.slice((p - 1) * s, p * s) });
+});
+
+/** 增值功能扣点（超清 / 下载 / 去广告 / 纯点看片） */
+app.post('/api/quota/spend', (req, res) => {
+  const cfg = store.settings.monetize || {};
+  const u = currentUser(req);
+  const b = req.body || {};
+  const feature = ['play', 'hd', 'download', 'noAd'].includes(b.feature) ? b.feature : 'play';
+
+  const isAdm = u ? isAdminAccount(u.account) : false;
+  const chk = pay.checkSpend(u, feature, cfg, { isAdmin: isAdm, isVip: u ? isVip(u) : false });
+  if (!chk.ok) {
+    return res.status(402).json({
+      error: chk.error,
+      needPoints: chk.needPoints,
+      points: chk.points,
+      needRecharge: true,
+      feature,
+    });
+  }
+  if (chk.cost > 0 && u) {
+    store.addQuota(u.account, { points: -chk.cost });
+    store.addQuotaLog({
+      account: u.account,
+      type: 'points',
+      delta: -chk.cost,
+      reason: { hd: '超清画质', download: '下载影片', noAd: '去广告', play: '点数观看' }[feature] || '增值功能',
+      ref: String(b.guid || ''),
+      after: pay.ensureQuota(store.findUser(u.account)).points,
+    });
+  }
+  res.json({
+    ok: true,
+    feature,
+    charged: chk.cost,
+    free: chk.free,
+    quota: pay.quotaView(store.findUser(u ? u.account : null), { cfg, isAdmin: isAdm, isVip: u ? isVip(u) : false }),
   });
 });
 
@@ -1468,7 +1694,8 @@ app.post('/api/user/redeem', (req, res) => {
   // 记录一条零金额订单，便于流水查询
   store.addOrder({
     id: pay.newOrderNo(),
-    type: rec.type === 'balance' ? 'recharge' : 'vip',
+    type: rec.type === 'balance' ? 'recharge' : rec.type === 'vip' ? 'vip' : 'quota',
+    quotaType: rec.type.startsWith('quota') ? rec.type : null,
     account: u.account,
     planId: null,
     planName: rec.planName + '（兑换码）',
@@ -1482,7 +1709,29 @@ app.post('/api/user/redeem', (req, res) => {
     title: rec.planName,
   });
 
-  res.json({ ok: true, redeem: r, vip: vipView(store.findUser(u.account)) });
+  // 额度类兑换补记额度流水
+  if (rec.type === 'quota_times' || rec.type === 'quota_points') {
+    const dim = rec.type === 'quota_times' ? 'times' : 'points';
+    store.addQuotaLog({
+      account: u.account,
+      type: dim,
+      delta: Number(rec.value) || 0,
+      reason: '兑换码兑换',
+      ref: rec.code,
+      after: pay.ensureQuota(store.findUser(u.account))[dim],
+    });
+  }
+
+  res.json({
+    ok: true,
+    redeem: r,
+    vip: vipView(store.findUser(u.account)),
+    quota: pay.quotaView(store.findUser(u.account), {
+      cfg,
+      isAdmin: isAdminAccount(u.account),
+      isVip: isVip(store.findUser(u.account)),
+    }),
+  });
 });
 
 /* ============================================================
@@ -1493,7 +1742,8 @@ app.post('/api/user/redeem', (req, res) => {
 app.put('/api/admin/monetize', requireAdmin, (req, res) => {
   const b = req.body || {};
   const patch = {};
-  for (const k of ['enabled', 'testMode', 'allowBalance', 'redeemEnabled', 'autoRenewTip', 'adminUnlimited']) {
+  for (const k of ['enabled', 'testMode', 'allowBalance', 'redeemEnabled', 'autoRenewTip', 'adminUnlimited',
+    'quotaEnabled', 'requireLogin', 'dedupeDaily', 'vipFreePlays', 'allowPointsForPlay']) {
     if (b[k] !== undefined) patch[k] = !!b[k];
   }
   if (b.mode !== undefined) patch.mode = b.mode === 'required' ? 'required' : 'optional';
@@ -1510,6 +1760,18 @@ app.put('/api/admin/monetize', requireAdmin, (req, res) => {
       .map((x) => Math.max(1, Number(x) || 0))
       .filter(Boolean)
       .slice(0, 12);
+  }
+  // 额度相关数值
+  for (const k of ['freeDailyPlays', 'costPerPlay']) {
+    if (b[k] !== undefined) patch[k] = Math.max(0, parseInt(b[k], 10) || 0);
+  }
+  if (b.costPerPlay !== undefined && !(patch.costPerPlay >= 1)) patch.costPerPlay = 1;
+  if (b.pointCosts && typeof b.pointCosts === 'object') {
+    const pc = {};
+    for (const k of ['play', 'hd', 'download', 'noAd']) {
+      pc[k] = Math.max(0, parseInt(b.pointCosts[k], 10) || 0);
+    }
+    patch.pointCosts = pc;
   }
   if (Array.isArray(b.plans)) {
     patch.plans = b.plans.slice(0, 20).map((p, i) => ({
@@ -1592,18 +1854,31 @@ app.get('/api/admin/redeem', requireAdmin, (req, res) => {
   }));
 });
 
+/** 兑换码类型标签与单位 */
+const REDEEM_LABEL = { vip: '会员', balance: '余额', quota_times: '次数额度', quota_points: '点数' };
+const REDEEM_UNIT = { vip: '天', balance: '元', quota_times: '次', quota_points: '点' };
+const REDEEM_LIMIT = { vip: 3650, balance: 100000, quota_times: 1000000, quota_points: 1000000 };
+
 app.post('/api/admin/redeem', requireAdmin, (req, res) => {
   const b = req.body || {};
-  const type = b.type === 'balance' ? 'balance' : 'vip';
+  const type = REDEEM_TYPES.includes(b.type) ? b.type : 'vip';
   const value = Number(b.value);
   if (!(value > 0)) return res.status(400).json({ error: '请填写有效的面额/天数' });
-  if (type === 'vip' && value > 3650) return res.status(400).json({ error: '会员天数过大' });
-  if (type === 'balance' && value > 100000) return res.status(400).json({ error: '充值金额过大' });
+  if (value > REDEEM_LIMIT[type]) {
+    return res.status(400).json({ error: `${REDEEM_LABEL[type]}数值过大（上限 ${REDEEM_LIMIT[type]}）` });
+  }
+
+  const defaultName = {
+    vip: `${value} 天会员`,
+    balance: '余额充值',
+    quota_times: `${value} 次观看额度`,
+    quota_points: `${value} 点数`,
+  }[type];
 
   const list = store.createRedeemCodes({
     type,
     value,
-    planName: String(b.planName || (type === 'balance' ? '余额充值' : `${value} 天会员`)).slice(0, 30),
+    planName: String(b.planName || defaultName).slice(0, 30),
     count: Math.max(1, Math.min(500, parseInt(b.count, 10) || 1)),
     batch: String(b.batch || '').slice(0, 24) || undefined,
     ttlDays: Math.max(0, parseInt(b.ttlDays, 10) || 0),
@@ -1622,16 +1897,22 @@ app.delete('/api/admin/redeem', requireAdmin, (req, res) => {
 app.get('/api/admin/redeem/export', requireAdmin, (req, res) => {
   const batch = req.query.batch || '';
   const status = req.query.status || '';
-  const all = store.queryRedeemCodes({ batch, status, page: 1, size: 200 }).list;
-  // 导出该筛选条件下的全部（最多 5000 条）
+  const type = req.query.type || '';
+  // 分页拉取全部匹配项（每页 200 为 store 上限）
+  const all = [];
+  for (let page = 1; page <= 100; page++) {
+    const chunk = store.queryRedeemCodes({ batch, status, type, page, size: 200 }).list;
+    all.push(...chunk);
+    if (chunk.length < 200) break;
+  }
   const rows = [];
   rows.push(['兑换码', '类型', '面额/天数', '套餐名', '批次', '状态', '使用者', '使用时间', '创建时间'].join(','));
   const fmt = (t) => (t ? new Date(t).toLocaleString('zh-CN') : '');
-  for (const x of all.slice(0, 5000)) {
+  for (const x of all) {
     rows.push([
       x.code,
-      x.type === 'balance' ? '余额' : '会员',
-      x.value,
+      REDEEM_LABEL[x.type] || '会员',
+      `${x.value} ${REDEEM_UNIT[x.type] || ''}`.trim(),
       `"${String(x.planName || '').replace(/"/g, '""')}"`,
       x.batch || '',
       x.used ? '已使用' : '未使用',
@@ -1645,6 +1926,95 @@ app.get('/api/admin/redeem/export', requireAdmin, (req, res) => {
   res.send('\ufeff' + rows.join('\n'));  // BOM 让 Excel 正确识别中文
 });
 
+/* ---- 后台：额度管理 ---- */
+
+/** 额度总览与用户列表 */
+app.get('/api/admin/quota/users', requireAdmin, (req, res) => {
+  const { keyword = '', status = '', page = 1, size = 20 } = req.query;
+  const result = store.queryQuotaUsers({
+    keyword, status,
+    page: parseInt(page, 10) || 1,
+    size: parseInt(size, 10) || 20,
+  });
+  res.json({ ...result, stats: store.quotaStats() });
+});
+
+/** 调整单个用户的额度 */
+app.put('/api/admin/quota/users/:account', requireAdmin, (req, res) => {
+  const u = store.findUser(req.params.account);
+  if (!u) return res.status(404).json({ error: '用户不存在' });
+  const b = req.body || {};
+  const mode = b.mode === 'delta' ? 'delta' : 'set';
+  const { times, points, reason } = b;
+
+  if (times === undefined && points === undefined) {
+    return res.status(400).json({ error: '请至少填写一项额度' });
+  }
+  const patch = {};
+  for (const k of ['times', 'points']) {
+    if (b[k] === undefined || b[k] === '') continue;
+    const n = parseInt(b[k], 10);
+    if (!Number.isFinite(n)) return res.status(400).json({ error: '额度需为整数' });
+    // set 模式：值即最终额度，不得小于 -1；delta 模式：允许负数为扣减
+    if (mode === 'set' && n < -1) return res.status(400).json({ error: '额度不能小于 -1（-1 表示无限）' });
+    if (Math.abs(n) > 10000000) return res.status(400).json({ error: '额度数值过大' });
+    patch[k] = n;
+  }
+
+  let after;
+  if (mode === 'delta') {
+    after = store.addQuota(u.account, patch);
+  } else {
+    after = store.setQuota(u.account, patch);
+  }
+  for (const k of Object.keys(patch)) {
+    store.addQuotaLog({
+      account: u.account,
+      type: k,
+      delta: mode === 'delta' ? patch[k] : null,
+      reason: String(reason || '后台调整').slice(0, 60),
+      ref: 'admin',
+      after: after ? after[k] : null,
+    });
+  }
+  res.json({ ok: true, quota: after });
+});
+
+/** 批量发放额度 */
+app.post('/api/admin/quota/grant', requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const accounts = Array.isArray(b.accounts) ? b.accounts.map((a) => String(a).toLowerCase()) : [];
+  if (!accounts.length) return res.status(400).json({ error: '请选择要发放的用户' });
+  const times = b.times === undefined || b.times === '' ? 0 : parseInt(b.times, 10) || 0;
+  const points = b.points === undefined || b.points === '' ? 0 : parseInt(b.points, 10) || 0;
+  if (!times && !points) return res.status(400).json({ error: '请填写要发放的额度' });
+
+  const done = [];
+  const missing = [];
+  for (const acc of accounts.slice(0, 500)) {
+    if (!store.findUser(acc)) { missing.push(acc); continue; }
+    const q = store.addQuota(acc, { times, points });
+    store.addQuotaLog({
+      account: acc, type: times ? 'times' : 'points',
+      delta: times || points,
+      reason: String(b.reason || '批量发放').slice(0, 60),
+      ref: 'admin-batch',
+      after: q ? q[times ? 'times' : 'points'] : null,
+    });
+    done.push(acc);
+  }
+  res.json({ ok: true, granted: done.length, accounts: done, missing });
+});
+
+/** 额度流水查询（后台） */
+app.get('/api/admin/quota/log', requireAdmin, (req, res) => {
+  const { account = '', page = 1, size = 30 } = req.query;
+  const all = account ? store.getQuotaLog(account, 500) : (store.getQuotaLog('', 0) || []);
+  const p = Math.max(1, parseInt(page, 10) || 1);
+  const s = Math.min(200, parseInt(size, 10) || 30);
+  res.json({ total: all.length, page: p, size: s, list: all.slice((p - 1) * s, p * s) });
+});
+
 /* ============================================================
  * 家庭共享（付费增值模块 · 1 户主 + 最多 5 成员）
  * ============================================================ */
@@ -1654,43 +2024,96 @@ app.get('/api/family/info', (req, res) => {
   const cfg = store.settings.family || {};
   const u = currentUser(req);
   const fam = u ? store.findFamilyOf(u.account) : null;
+  const role = fam && u
+    ? (fam.owner === u.account ? 'owner'
+      : ((fam.members || []).find((x) => x.account === u.account) || {}).role || 'member')
+    : null;
   res.json({
     enabled: cfg.enabled !== false,
     requireVip: cfg.requireVip !== false,
     maxMembers: cfg.maxMembers || 5,
     allowLeave: cfg.allowLeave !== false,
     shareVip: cfg.shareVip !== false,
+    // 并发流 / 设备 / 额度池 / 邀请 / 分级
+    maxStreams: cfg.maxStreams === undefined ? 2 : cfg.maxStreams,
+    deviceLimit: cfg.deviceLimit === undefined ? 3 : cfg.deviceLimit,
+    streamPolicy: cfg.streamPolicy || 'replace',
+    shareQuota: cfg.shareQuota !== false,
+    familyQuotaPool: cfg.familyQuotaPool === undefined ? 100 : cfg.familyQuotaPool,
+    inviteTtlDays: cfg.inviteTtlDays || 3,
+    inviteRole: cfg.inviteRole || 'member',
+    autoApprove: !!cfg.autoApprove,
+    parentalEnabled: cfg.parentalEnabled !== false,
+    childMaxRating: cfg.childMaxRating || 'PG13',
+    roles: FAMILY_ROLES.filter((r) => r !== 'owner').map((r) => ({
+      id: r, name: FAMILY_ROLE_NAME[r], perms: familyPerms(r),
+    })),
     family: fam ? familyView(fam, u) : null,
-    role: fam ? (fam.owner === (u && u.account) ? 'owner' : 'member') : null,
+    role,
+    perms: role ? familyPerms(role) : null,
   });
 });
 
 /** 家庭视图（脱敏） */
 function familyView(fam, me) {
   const owner = store.findUser(fam.owner);
+  const ownerAcc = owner ? owner.account : fam.owner;
   const members = (fam.members || []).map((m) => {
     const u = store.findUser(m.account);
+    const role = FAMILY_ROLES.includes(m.role) ? m.role : 'member';
     return {
       account: m.account,
       nickname: u ? u.nickname || u.account : m.account,
       avatar: u ? u.avatar : '',
       joinedAt: m.joinedAt,
+      role,
+      roleName: FAMILY_ROLE_NAME[role] || '成员',
+      pending: !!m.pending,
       isOwner: false,
+      devices: (m.devices || []).map((d) => ({ id: d.id, name: d.name, lastAt: d.lastAt })),
+      deviceCount: (m.devices || []).length,
     };
   });
+  const active = members.filter((m) => !m.pending);
+  const cfg = store.settings.family || {};
+  const role = me ? (fam.owner === me.account ? 'owner'
+    : ((fam.members || []).find((x) => x.account === me.account) || {}).role || 'member') : null;
   return {
     id: fam.id,
     name: fam.name,
-    owner: fam.owner,
+    owner: ownerAcc,
     ownerNickname: owner ? owner.nickname || owner.account : fam.owner,
     ownerAvatar: owner ? owner.avatar : '',
     ownerVip: owner ? isVip(owner) : false,
     members,
-    count: members.length,
-    maxMembers: (store.settings.family && store.settings.family.maxMembers) || 5,
+    count: active.length,
+    pending: members.filter((m) => m.pending).length,
+    maxMembers: cfg.maxMembers || 5,
     isOwner: me ? fam.owner === me.account : false,
+    role,
+    roleName: FAMILY_ROLE_NAME[role] || null,
+    perms: role ? familyPerms(role) : null,
     createdAt: fam.createdAt,
+    // 额度池
+    quotaPool: Number(fam.quotaPool) || 0,
+    poolUsed: Number(fam.poolUsed) || 0,
+    poolRemain: (Number(fam.quotaPool) || 0) === -1
+      ? -1 : Math.max(0, (Number(fam.quotaPool) || 0) - (Number(fam.poolUsed) || 0)),
+    maxStreams: cfg.maxStreams === undefined ? 2 : cfg.maxStreams,
+    deviceLimit: cfg.deviceLimit === undefined ? 3 : cfg.deviceLimit,
   };
+}
+
+/** 角色能力（对标 Jellyfin/Emby 用户权限矩阵） */
+function familyPerms(role) {
+  const base = FAMILY_ROLE_PERMS[role] || FAMILY_ROLE_PERMS.member;
+  const cfg = store.settings.family || {};
+  const out = { ...base };
+  if (role === 'child' || role === 'guest') {
+    if (cfg.childBlockVip !== false) { out.hd = false; out.download = false; }
+    if (cfg.childBlockComment !== false) out.comment = false;
+  }
+  return out;
 }
 
 /** 判断会员是否有效（家庭共享时成员也算） */
@@ -1736,7 +2159,7 @@ app.put('/api/family', (req, res) => {
   res.json({ ok: true, family: familyView(store.getFamily(fam.id), u) });
 });
 
-/** 生成邀请码 */
+/** 生成邀请码（支持指定角色 / 可用次数 / 备注） */
 app.post('/api/family/invite', (req, res) => {
   const cfg = store.settings.family || {};
   if (cfg.enabled === false) return res.status(403).json({ error: '家庭功能未开启' });
@@ -1744,12 +2167,22 @@ app.post('/api/family/invite', (req, res) => {
   if (!u) return res.status(401).json({ error: '请先登录' });
   const fam = store.findFamilyOf(u.account);
   if (!fam) return res.status(404).json({ error: '你还没有家庭' });
-  if (fam.owner !== u.account) return res.status(403).json({ error: '只有户主可以邀请成员' });
+  const meRole = fam.owner === u.account ? 'owner'
+    : ((fam.members || []).find((x) => x.account === u.account) || {}).role;
+  if (!familyPerms(meRole).invite) return res.status(403).json({ error: '只有户主或家庭管理员可以邀请成员' });
   const max = cfg.maxMembers || 5;
-  if ((fam.members || []).length >= max) return res.status(400).json({ error: `成员已满（最多 ${max} 人）` });
-  const ttl = Math.max(1, Math.min(30, parseInt((req.body && req.body.days) || 3, 10) || 3)) * 86400000;
-  const inv = store.createInvite(fam.id, u.account, ttl);
-  res.json({ ok: true, code: inv.code, expire: inv.expire });
+  const activeCount = (fam.members || []).filter((m) => !m.pending).length;
+  if (activeCount >= max) return res.status(400).json({ error: `成员已满（最多 ${max} 人）` });
+
+  const b = req.body || {};
+  const days = Math.max(1, Math.min(30, parseInt(b.days || cfg.inviteTtlDays || 3, 10) || 3));
+  const role = FAMILY_ROLES.includes(b.role) && b.role !== 'owner' ? b.role : (cfg.inviteRole || 'member');
+  const maxUses = Math.max(1, Math.min(50, parseInt(b.maxUses, 10) || 1));
+  const inv = store.createInvite(fam.id, u.account, days * 86400000, role, {
+    maxUses, note: b.note,
+  });
+  res.json({ ok: true, code: inv.code, expire: inv.expire, role: inv.role,
+    roleName: FAMILY_ROLE_NAME[inv.role], maxUses: inv.maxUses, url: '/#/join?code=' + inv.code });
 });
 
 /** 查看当前有效邀请码 */
@@ -1761,7 +2194,12 @@ app.get('/api/family/invites', (req, res) => {
   const list = store
     .getInvites()
     .filter((i) => i.familyId === fam.id && !i.used && i.expire > Date.now())
-    .map((i) => ({ code: i.code, expire: i.expire, createdAt: i.createdAt }))
+    .map((i) => ({
+      code: i.code, expire: i.expire, createdAt: i.createdAt,
+      role: i.role || 'member', roleName: FAMILY_ROLE_NAME[i.role || 'member'] || '成员',
+      maxUses: i.maxUses || 1, usedCount: i.usedCount || 0, note: i.note || '',
+      url: '/#/join?code=' + i.code,
+    }))
     .sort((a, b) => b.createdAt - a.createdAt);
   res.json({ invites: list, isOwner: fam.owner === u.account });
 });
@@ -1785,15 +2223,25 @@ app.get('/api/family/invite/:code/peek', (req, res) => {
   const fam = store.getFamily(inv.familyId);
   if (!fam) return res.status(404).json({ error: '家庭不存在' });
   const owner = store.findUser(fam.owner);
+  const role = inv.role || 'member';
+  const cfg = store.settings.family || {};
   res.json({
     familyName: fam.name,
     ownerNickname: owner ? owner.nickname || owner.account : fam.owner,
-    count: (fam.members || []).length,
-    maxMembers: (store.settings.family && store.settings.family.maxMembers) || 5,
+    ownerAvatar: owner ? owner.avatar : '',
+    count: (fam.members || []).filter((m) => !m.pending).length,
+    maxMembers: cfg.maxMembers || 5,
+    role,
+    roleName: FAMILY_ROLE_NAME[role] || '成员',
+    perms: familyPerms(role),
+    maxUses: inv.maxUses || 1,
+    usedCount: inv.usedCount || 0,
+    note: inv.note || '',
+    autoApprove: !!cfg.autoApprove,
   });
 });
 
-/** 通过邀请码加入家庭 */
+/** 通过邀请码加入家庭（支持自动通过 / 待审核） */
 app.post('/api/family/join', (req, res) => {
   const cfg = store.settings.family || {};
   if (cfg.enabled === false) return res.status(403).json({ error: '家庭功能未开启' });
@@ -1805,6 +2253,7 @@ app.post('/api/family/join', (req, res) => {
   const inv = store.findInvite(code);
   if (!inv || inv.used) return res.status(404).json({ error: '邀请码无效或已使用' });
   if (inv.expire < Date.now()) return res.status(410).json({ error: '邀请码已过期' });
+  if ((Number(inv.usedCount) || 0) >= (inv.maxUses || 1)) return res.status(410).json({ error: '邀请码使用次数已用尽' });
 
   const fam = store.getFamily(inv.familyId);
   if (!fam) return res.status(404).json({ error: '家庭不存在' });
@@ -1815,10 +2264,23 @@ app.post('/api/family/join', (req, res) => {
     return res.status(409).json({ error: '你已加入其它家庭，请先退出' });
   }
 
-  const r = store.addFamilyMember(fam.id, u.account);
+  const pending = cfg.autoApprove === false;   // autoApprove 关闭 → 待户主审核
+  const r = pending
+    ? store.addPendingMember(fam.id, u.account, inv.role)
+    : store.addFamilyMember(fam.id, u.account, inv.role);
   if (r.error) return res.status(400).json({ error: r.error });
   store.consumeInvite(code);
-  res.json({ ok: true, family: familyView(store.getFamily(fam.id), u) });
+
+  // 记录本次加入的设备
+  const devId = String((req.body && req.body.deviceId) || req.headers['x-device-id'] || '').slice(0, 64);
+  if (devId && !pending) {
+    store.touchDevice(fam.id, u.account, devId, (req.body && req.body.deviceName) || '');
+  }
+  res.json({
+    ok: true, pending,
+    message: pending ? '已提交加入申请，等待户主审核' : '已加入家庭',
+    family: familyView(store.getFamily(fam.id), u),
+  });
 });
 
 /** 移除成员（户主）或退出家庭（成员） */
@@ -1859,6 +2321,149 @@ app.get('/api/family/members', (req, res) => {
   const fam = store.findFamilyOf(u.account);
   if (!fam) return res.json({ members: [], owner: null });
   res.json(familyView(fam, u));
+});
+
+/* ---------------- 家庭 · 角色 / 审核 / 设备 / 额度池 ---------------- */
+
+/** 当前用户在该家庭的角色（helper） */
+function myFamilyRole(fam, account) {
+  if (!fam) return null;
+  if (fam.owner === account) return 'owner';
+  return ((fam.members || []).find((m) => m.account === account) || {}).role || null;
+}
+function canManage(fam, account) {
+  return !!familyPerms(myFamilyRole(fam, account) || '').manage;
+}
+
+/** 修改成员角色（户主 / 家庭管理员） */
+app.put('/api/family/member/:account/role', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const fam = store.findFamilyOf(u.account);
+  if (!fam) return res.status(404).json({ error: '你还没有家庭' });
+  if (!canManage(fam, u.account)) return res.status(403).json({ error: '只有户主或家庭管理员可以调整角色' });
+  const target = req.params.account;
+  if (target === fam.owner) return res.status(400).json({ error: '不能修改户主角色' });
+  const role = String((req.body && req.body.role) || '');
+  if (!FAMILY_ROLES.includes(role) || role === 'owner') return res.status(400).json({ error: '无效的角色' });
+  if (role === 'admin' && myFamilyRole(fam, u.account) !== 'owner') {
+    return res.status(403).json({ error: '只有户主可以设置家庭管理员' });
+  }
+  store.setFamilyRole(fam.id, target, role);
+  res.json({ ok: true, family: familyView(store.getFamily(fam.id), u) });
+});
+
+/** 审核通过待加入成员 */
+app.post('/api/family/member/:account/approve', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const fam = store.findFamilyOf(u.account);
+  if (!fam) return res.status(404).json({ error: '你还没有家庭' });
+  if (!canManage(fam, u.account)) return res.status(403).json({ error: '无权审核' });
+  const max = (store.settings.family && store.settings.family.maxMembers) || 5;
+  const activeCount = (fam.members || []).filter((m) => !m.pending).length;
+  if (activeCount >= max) return res.status(400).json({ error: `成员已满（最多 ${max} 人）` });
+  store.approveFamilyMember(fam.id, req.params.account);
+  res.json({ ok: true, family: familyView(store.getFamily(fam.id), u) });
+});
+
+/** 设备列表（自己 / 户主看全部） */
+app.get('/api/family/devices', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const fam = store.findFamilyOf(u.account);
+  if (!fam) return res.json({ devices: [] });
+  const isMgr = canManage(fam, u.account);
+  const devices = [];
+  for (const m of (fam.members || [])) {
+    if (!isMgr && m.account !== u.account) continue;
+    for (const d of (m.devices || [])) {
+      devices.push({ account: m.account, deviceId: d.id, name: d.name, lastAt: d.lastAt });
+    }
+  }
+  devices.sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  res.json({ devices, deviceLimit: (store.settings.family || {}).deviceLimit || 3, canManage: isMgr });
+});
+
+/** 设备登记 / 心跳（前端播放时调用，实现"设备数限制"） */
+app.post('/api/family/device', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const fam = store.findFamilyOf(u.account);
+  if (!fam) return res.json({ ok: true, noFamily: true });
+  const cfg = store.settings.family || {};
+  const limit = cfg.deviceLimit === undefined ? 3 : Number(cfg.deviceLimit);
+  const deviceId = String((req.body && req.body.deviceId) || '').slice(0, 64);
+  if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+  const m = (fam.members || []).find((x) => x.account === u.account);
+  const existing = ((m && m.devices) || []).map((d) => d.id);
+  if (fam.owner !== u.account && limit > 0 && !existing.includes(deviceId) && existing.length >= limit) {
+    return res.status(403).json({
+      error: `设备数已达上限（最多 ${limit} 台）`, needDevice: true, deviceLimit: limit,
+      devices: (m.devices || []).map((d) => ({ id: d.id, name: d.name, lastAt: d.lastAt })),
+    });
+  }
+  store.touchDevice(fam.id, u.account, deviceId, (req.body && req.body.name) || '');
+  res.json({ ok: true, deviceLimit: limit });
+});
+
+/** 移除设备 */
+app.delete('/api/family/device/:deviceId', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const fam = store.findFamilyOf(u.account);
+  if (!fam) return res.status(404).json({ error: '你还没有家庭' });
+  const targetAcc = String(req.query.account || u.account);
+  if (targetAcc !== u.account && !canManage(fam, u.account)) {
+    return res.status(403).json({ error: '无权移除他人设备' });
+  }
+  const m = (fam.members || []).find((x) => x.account === targetAcc);
+  if (m) {
+    m.devices = (m.devices || []).filter((d) => d.id !== req.params.deviceId);
+    store.updateFamily(fam.id, { members: fam.members });
+  }
+  res.json({ ok: true });
+});
+
+/** 家庭额度池：查看 / 充值（户主） */
+app.get('/api/family/quota', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const fam = store.findFamilyOf(u.account);
+  if (!fam) return res.json({ pool: 0, used: 0, remain: 0 });
+  const pool = Number(fam.quotaPool) || 0;
+  const used = Number(fam.poolUsed) || 0;
+  res.json({
+    pool, used, remain: pool === -1 ? -1 : Math.max(0, pool - used),
+    canRefill: fam.owner === u.account,
+    shareQuota: (store.settings.family || {}).shareQuota !== false,
+  });
+});
+
+/** 重置额度池用量 / 调整池上限 */
+app.put('/api/family/quota', (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: '请先登录' });
+  const fam = store.findFamilyOf(u.account);
+  if (!fam) return res.status(404).json({ error: '你还没有家庭' });
+  if (fam.owner !== u.account) return res.status(403).json({ error: '只有户主可以调整家庭额度池' });
+  const b = req.body || {};
+  if (b.reset) {
+    fam.poolUsed = 0;
+    store.updateFamily(fam.id, { poolUsed: 0 });
+  }
+  if (b.amount !== undefined) {
+    const amt = Math.trunc(Number(b.amount) || 0);
+    if (b.mode === 'delta') store.refillFamilyQuota(fam.id, amt);
+    else {
+      if (amt < -1) return res.status(400).json({ error: '池上限不能小于 -1（-1 表示无限）' });
+      store.updateFamily(fam.id, { quotaPool: amt });
+    }
+  }
+  const f2 = store.getFamily(fam.id);
+  const pool = Number(f2.quotaPool) || 0;
+  const used = Number(f2.poolUsed) || 0;
+  res.json({ ok: true, pool, used, remain: pool === -1 ? -1 : Math.max(0, pool - used) });
 });
 
 /* ============================================================

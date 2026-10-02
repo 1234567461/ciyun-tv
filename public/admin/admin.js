@@ -18,6 +18,10 @@ const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 
+/** 兑换码类型的显示标签与单位（四态） */
+const RD_LABEL = { vip: '会员时长', balance: '余额', quota_times: '观看次数', quota_points: '通用点数' };
+const RD_UNIT = { vip: '天', balance: '元', quota_times: '次', quota_points: '点' };
+
 function toast(msg, type = '') {
   let host = $('#toast-host');
   if (!host) { host = document.createElement('div'); host.id = 'toast-host'; host.className = 'toast-host'; document.body.appendChild(host); }
@@ -458,6 +462,7 @@ async function viewMonetize(c) {
       adminTab('overview', '\ud83d\udcca 收入概览') +
       adminTab('config', '\u2699\ufe0f 付费设置') +
       adminTab('plans', '\ud83d\udc8e 会员套餐') +
+      adminTab('quota', '\ud83c\udf9f\ufe0f 额度设置') +
       adminTab('orders', '\ud83e\uddfe 订单管理') +
       adminTab('redeem', '\ud83c\udf81 兑换码') +
     '</div>' +
@@ -469,6 +474,7 @@ async function viewMonetize(c) {
     if (mtState.tab === 'overview') renderMtOverview(body, rev);
     else if (mtState.tab === 'config') renderMtConfig(body, m);
     else if (mtState.tab === 'plans') renderMtPlans(body, m);
+    else if (mtState.tab === 'quota') renderMtQuota(body, m);
     else if (mtState.tab === 'orders') renderMtOrders(body);
     else renderMtRedeem(body);
   };
@@ -642,6 +648,145 @@ function renderMtPlans(box, m) {
   };
 }
 
+/* ---------------------------- 额度设置 ---------------------------- */
+async function renderMtQuota(box, m) {
+  let stats = null, users = null;
+  try {
+    const r = await API('/api/admin/quota/users?size=20');
+    stats = r.stats; users = r;
+  } catch (e) { /* 忽略，下面给提示 */ }
+
+  box.innerHTML =
+    '<div class="grid4" style="margin-bottom:18px">' +
+      statCard('额度用户', String((stats && stats.users) || 0), '共 ' + ((stats && stats.withTimes) || 0) + ' 人持有次数') +
+      statCard('无限额度', String((stats && stats.unlimited) || 0), '会员 / 管理员特权') +
+      statCard('未消耗次数', String((stats && stats.totalTimes) || 0), '次') +
+      statCard('未消耗点数', String((stats && stats.totalPoints) || 0), '点') +
+    '</div>' +
+
+    '<div class="card"><h3>\ud83c\udf9f\ufe0f 额度规则</h3>' +
+      '<div class="switch-row"><div><div class="t">开启额度系统</div><div class="d">开启后按次数 / 点数控制观看与增值功能（关闭则全部免费）</div></div>' + sw('mq-en', m.quotaEnabled === true) + '</div>' +
+      '<div class="switch-row"><div><div class="t">观看需登录</div><div class="d">未登录用户无法观看影片</div></div>' + sw('mq-login', m.requireLogin !== false) + '</div>' +
+      '<div class="switch-row"><div><div class="t">会员免观看额度</div><div class="d">会员观看不消耗次数与点数</div></div>' + sw('mq-vipfree', m.vipFreePlays !== false) + '</div>' +
+      '<div class="switch-row"><div><div class="t">同日同片不重复扣</div><div class="d">同一部影片当天重复观看只计一次</div></div>' + sw('mq-dedupe', m.dedupeDaily !== false) + '</div>' +
+      '<div class="switch-row"><div><div class="t">允许点数抵扣观看</div><div class="d">次数额度用完后可用点数继续观看</div></div>' + sw('mq-pointplay', m.allowPointsForPlay !== false) + '</div>' +
+      '<div class="row" style="margin-top:14px">' +
+        '<div><label>每日免费观看次数</label><input id="mq-free" type="number" min="0" value="' + (m.freeDailyPlays || 0) + '"></div>' +
+        '<div><label>每次观看消耗次数</label><input id="mq-cost" type="number" min="1" value="' + (m.costPerPlay || 1) + '"></div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text-mute);margin-top:6px">每日免费次数按自然日重置，0 表示无免费额度</div>' +
+    '</div>' +
+
+    '<div class="card"><h3>\u2b50 点数消耗表</h3>' +
+      '<div class="row">' +
+        '<div><label>纯点数看片（点/部）</label><input id="mq-p-play" type="number" min="0" value="' + ((m.pointCosts && m.pointCosts.play) || 0) + '"></div>' +
+        '<div><label>超清画质（点/次）</label><input id="mq-p-hd" type="number" min="0" value="' + ((m.pointCosts && m.pointCosts.hd) || 0) + '"></div>' +
+        '<div><label>下载影片（点/次）</label><input id="mq-p-dl" type="number" min="0" value="' + ((m.pointCosts && m.pointCosts.download) || 0) + '"></div>' +
+        '<div><label>去广告（点/次）</label><input id="mq-p-noad" type="number" min="0" value="' + ((m.pointCosts && m.pointCosts.noAd) || 0) + '"></div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text-mute);margin-top:6px">会员与管理员自动豁免，不消耗点数</div>' +
+    '</div>' +
+
+    '<button class="btn btn-primary" id="mq-save">保存额度规则</button>' +
+
+    '<div class="card" style="margin-top:20px"><h3>\ud83d\udc65 用户额度</h3>' +
+      '<div class="row" style="margin-bottom:14px;gap:10px">' +
+        '<div style="flex:1"><input id="mq-kw" placeholder="搜索账号 / 昵称"></div>' +
+        '<div><select id="mq-status"><option value="">全部用户</option><option value="has">已有额度</option><option value="empty">无额度</option></select></div>' +
+        '<button class="btn btn-ghost" id="mq-search">搜索</button>' +
+        '<button class="btn btn-primary" id="mq-grant">批量发放</button>' +
+      '</div>' +
+      '<div id="mq-list">' + (users ? renderQuotaUserTable(users) : '<div class="empty">加载失败</div>') + '</div>' +
+    '</div>';
+
+  ['mq-en', 'mq-login', 'mq-vipfree', 'mq-dedupe', 'mq-pointplay'].forEach((id) => {
+    const el = $('#' + id);
+    if (el) el.onclick = () => el.classList.toggle('on');
+  });
+
+  $('#mq-save').onclick = async () => {
+    const body = {
+      quotaEnabled: $('#mq-en').classList.contains('on'),
+      requireLogin: $('#mq-login').classList.contains('on'),
+      vipFreePlays: $('#mq-vipfree').classList.contains('on'),
+      dedupeDaily: $('#mq-dedupe').classList.contains('on'),
+      allowPointsForPlay: $('#mq-pointplay').classList.contains('on'),
+      freeDailyPlays: +$('#mq-free').value || 0,
+      costPerPlay: Math.max(1, +$('#mq-cost').value || 1),
+      pointCosts: {
+        play: +$('#mq-p-play').value || 0,
+        hd: +$('#mq-p-hd').value || 0,
+        download: +$('#mq-p-dl').value || 0,
+        noAd: +$('#mq-p-noad').value || 0,
+      },
+    };
+    try {
+      await API('/api/admin/monetize', { method: 'PUT', body });
+      toast('额度规则已保存', 'ok');
+      viewMonetize($('#content'));
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  const loadUsers = async () => {
+    const q = new URLSearchParams({ keyword: $('#mq-kw').value.trim(), status: $('#mq-status').value, page: 1, size: 20 });
+    try {
+      const d = await API('/api/admin/quota/users?' + q);
+      $('#mq-list').innerHTML = renderQuotaUserTable(d);
+      bindRowActs();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  $('#mq-search').onclick = loadUsers;
+  $('#mq-kw').oninput = debounce(loadUsers, 450);
+  $('#mq-status').onchange = loadUsers;
+
+  $('#mq-grant').onclick = () => {
+    const accs = prompt('请输入要发放的账号，多个用逗号分隔：');
+    if (!accs) return;
+    const times = prompt('发放观看次数（留空或 0 表示不发）：', '100');
+    const points = prompt('发放通用点数（留空或 0 表示不发）：', '0');
+    API('/api/admin/quota/grant', {
+      method: 'POST',
+      body: { accounts: accs.split(/[,\uff0c\s]+/).filter(Boolean), times: +times || 0, points: +points || 0, reason: '后台批量发放' },
+    }).then((r) => { toast('已为 ' + r.granted + ' 位用户发放额度', 'ok'); loadUsers(); })
+      .catch((e) => toast(e.message, 'err'));
+  };
+
+  function bindRowActs() {
+    $$('#mq-list .mq-adj').forEach((b) => {
+      b.onclick = async () => {
+        const acc = b.dataset.acc;
+        const times = prompt('设置观看次数（-1 表示无限）：', b.dataset.times);
+        if (times === null) return;
+        const points = prompt('设置通用点数（-1 表示无限）：', b.dataset.points);
+        if (points === null) return;
+        try {
+          await API('/api/admin/quota/users/' + acc, {
+            method: 'PUT',
+            body: { mode: 'set', times: parseInt(times, 10), points: parseInt(points, 10), reason: '后台调整' },
+          });
+          toast('已更新 ' + acc + ' 的额度', 'ok');
+          loadUsers();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    });
+  }
+  bindRowActs();
+}
+
+function renderQuotaUserTable(d) {
+  const list = (d && d.list) || [];
+  if (!list.length) return '<div class="empty">暂无匹配用户</div>';
+  let html = '<div class="table-wrap"><table class="table"><thead><tr><th>账号</th><th>昵称</th><th>观看次数</th><th>通用点数</th><th>已消耗</th><th style="width:90px">操作</th></tr></thead><tbody>';
+  list.forEach((u) => {
+    const fmt = (n) => (n === -1 ? '<b style="color:#f5c542">∞</b>' : String(n));
+    html += '<tr><td>' + esc(u.account) + '</td><td>' + esc(u.nickname) + '</td>' +
+      '<td>' + fmt(u.times) + '</td><td>' + fmt(u.points) + '</td>' +
+      '<td style="font-size:12px;color:var(--text-mute)">' + u.usedPlays + ' 次 / ' + u.usedPoints + ' 点</td>' +
+      '<td><button class="btn btn-ghost btn-sm mq-adj" data-acc="' + esc(u.account) + '" data-times="' + u.times + '" data-points="' + u.points + '">调整</button></td></tr>';
+  });
+  return html + '</tbody></table></div>';
+}
+
 /* ---------------------------- 订单管理 ---------------------------- */
 async function renderMtOrders(box) {
   const f = mtState.filter || {};
@@ -739,14 +884,19 @@ async function renderMtRedeem(box) {
   box.innerHTML =
     '<div class="card"><h3>\ud83c\udf81 批量生成兑换码</h3>' +
       '<div class="row" style="flex-wrap:wrap">' +
-        '<div><label>类型</label><select id="mr-type"><option value="vip">会员时长</option><option value="balance">余额充值</option></select></div>' +
-        '<div><label>面额 / 天数</label><input id="mr-value" type="number" min="1" value="30"></div>' +
+        '<div><label>类型</label><select id="mr-type">' +
+          '<option value="vip">会员时长</option>' +
+          '<option value="balance">余额充值</option>' +
+          '<option value="quota_times">观看次数额度</option>' +
+          '<option value="quota_points">通用点数</option>' +
+        '</select></div>' +
+        '<div><label id="mr-value-label">面额 / 天数</label><input id="mr-value" type="number" min="1" value="30"></div>' +
         '<div><label>数量（最多 500）</label><input id="mr-count" type="number" min="1" max="500" value="10"></div>' +
         '<div><label>有效期（天，0=永久）</label><input id="mr-ttl" type="number" min="0" value="0"></div>' +
         '<div><label>批次标记</label><input id="mr-batch" placeholder="如 2026春节"></div>' +
       '</div>' +
-      '<div style="font-size:12.5px;color:var(--text-mute);margin:14px 0">' +
-        '会员时长类型：面额填天数（如 30 = 一个月）；余额类型：面额填金额（如 50 = 50 元）' +
+      '<div style="font-size:12.5px;color:var(--text-mute);margin:14px 0" id="mr-hint">' +
+        '会员时长：填天数（30 = 一个月）｜余额：填金额（50 = 50 元）｜次数额度：填可看部数｜点数：填点数' +
       '</div>' +
       '<button class="btn btn-primary" id="mr-gen">生成兑换码</button>' +
       '<div id="mr-result" style="margin-top:18px"></div>' +
@@ -754,7 +904,10 @@ async function renderMtRedeem(box) {
     '<div class="card"><h3>\ud83d\udccb 兑换码列表</h3>' +
       '<div class="row" style="margin-bottom:16px;flex-wrap:wrap;gap:10px">' +
         '<input id="mr-kw2" placeholder="搜索兑换码 / 使用者\u2026" style="flex:1;min-width:180px">' +
-        '<select id="mr-status" style="width:130px"><option value="">全部状态</option>' +
+        '<select id="mr-type2" style="width:140px"><option value="">全部类型</option>' +
+          '<option value="vip">会员时长</option><option value="balance">余额充值</option>' +
+          '<option value="quota_times">观看次数</option><option value="quota_points">通用点数</option></select>' +
+        '<select id="mr-status" style="width:120px"><option value="">全部状态</option>' +
           '<option value="unused">未使用</option><option value="used">已使用</option></select>' +
         '<input id="mr-batch2" placeholder="批次筛选" style="width:150px">' +
         '<button class="btn btn-ghost btn-sm" id="mr-search">筛选</button>' +
@@ -762,9 +915,12 @@ async function renderMtRedeem(box) {
       '</div><div id="mr-list"></div></div>';
 
   $('#mr-type').onchange = () => {
-    const isBal = $('#mr-type').value === 'balance';
-    $('#mr-value').value = isBal ? 50 : 30;
-    $('#mr-value').placeholder = isBal ? '金额' : '天数';
+    const t = $('#mr-type').value;
+    const preset = { vip: 30, balance: 50, quota_times: 100, quota_points: 50 }[t] || 30;
+    const label = { vip: '天数', balance: '金额', quota_times: '可看部数', quota_points: '点数' }[t] || '数值';
+    $('#mr-value').value = preset;
+    $('#mr-value').placeholder = label;
+    $('#mr-value-label').textContent = '面额 / ' + label;
   };
 
   $('#mr-gen').onclick = async () => {
@@ -800,6 +956,7 @@ async function renderMtRedeem(box) {
     $('#mr-list').innerHTML = '<div class="empty"><div class="i">\u23f3</div>加载中\u2026</div>';
     const q = new URLSearchParams({
       keyword: $('#mr-kw2').value.trim(),
+      type: $('#mr-type2').value,
       status: $('#mr-status').value,
       batch: $('#mr-batch2').value.trim(),
       page: 1, size: 100,
@@ -815,8 +972,8 @@ async function renderMtRedeem(box) {
       '</tr></thead><tbody>' + d.list.map((x) =>
         '<tr><td><input type="checkbox" class="mr-ck" value="' + esc(x.code) + '"></td>' +
         '<td style="font-family:monospace;font-size:13px;letter-spacing:1px">' + esc(x.code) + '</td>' +
-        '<td>' + (x.type === 'balance' ? '余额' : '会员') + '</td>' +
-        '<td><b>' + (x.type === 'balance' ? '\u00a5' + x.value : x.value + ' 天') + '</b></td>' +
+        '<td>' + (RD_LABEL[x.type] || '会员') + '</td>' +
+        '<td><b>' + (x.type === 'balance' ? '\u00a5' + x.value : x.value + ' ' + (RD_UNIT[x.type] || '天')) + '</b></td>' +
         '<td>' + esc(x.planName || '\u2014') + '</td>' +
         '<td style="font-size:12px;color:var(--text-mute)">' + esc(x.batch || '\u2014') + '</td>' +
         '<td>' + (x.used ? '<span class="badge dim">已使用</span>' : (x.expire && x.expire < Date.now() ? '<span class="badge err">已过期</span>' : '<span class="badge ok">未使用</span>')) + '</td>' +
@@ -844,7 +1001,11 @@ async function renderMtRedeem(box) {
   $('#mr-kw2').oninput = debounce(loadList, 400);
   $('#mr-status').onchange = loadList;
   $('#mr-export').onclick = () => {
-    const q = new URLSearchParams({ batch: $('#mr-batch2').value.trim(), status: $('#mr-status').value });
+    const q = new URLSearchParams({
+      batch: $('#mr-batch2').value.trim(),
+      status: $('#mr-status').value,
+      type: $('#mr-type2').value,
+    });
     window.open('/api/admin/redeem/export?' + q, '_blank');
   };
   loadList();
@@ -1111,22 +1272,55 @@ async function viewUsers(c) {
    家庭管理
    ============================================================ */
 async function viewFamilies(c) {
-  c.innerHTML = '<div class="page-head"><div><h2>家庭共享</h2><div class="sub">家庭单元、成员与共享策略</div></div></div>' +
+  c.innerHTML = '<div class="page-head"><div><h2>家庭共享</h2><div class="sub">家庭单元 · 角色权限 · 设备并发 · 额度共享</div></div></div>' +
     '<div class="card"><h3>\u2699\ufe0f 模块设置</h3><div id="fam-cfg"></div></div>' +
     '<div class="card"><h3>\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 家庭列表</h3><div id="fam-list"></div></div>';
 
   const cfg = (app.settings && app.settings.family) || {};
   const sw = (id, on) => '<div class="switch ' + (on ? 'on' : '') + '" id="' + id + '"></div>';
-  $('#fam-cfg').innerHTML =
-    '<div class="switch-row"><div><div class="t">启用家庭功能</div><div class="d">关闭后前台隐藏家庭入口</div></div>' + sw('f-en', cfg.enabled !== false) + '</div>' +
-    '<div class="switch-row"><div><div class="t">需会员才能创建</div><div class="d">户主必须是有效会员</div></div>' + sw('f-vip', cfg.requireVip !== false) + '</div>' +
-    '<div class="switch-row"><div><div class="t">成员共享会员权益</div><div class="d">户主是会员时，成员同步享受（如去广告）</div></div>' + sw('f-share', cfg.shareVip !== false) + '</div>' +
-    '<div class="switch-row"><div><div class="t">允许成员主动退出</div><div class="d">关闭后仅户主可移除成员</div></div>' + sw('f-leave', cfg.allowLeave !== false) + '</div>' +
-    '<div class="field" style="margin-top:12px"><label>每户最多成员数（不含户主，1+?）</label>' +
-    '<input id="f-max" type="number" min="1" max="20" value="' + (cfg.maxMembers || 5) + '" style="max-width:160px"></div>' +
-    '<button class="btn btn-primary btn-sm" id="f-save" style="margin-top:14px">保存设置</button>';
+  const row = (id, t, d, on) => '<div class="switch-row"><div><div class="t">' + t + '</div><div class="d">' + d + '</div></div>' + sw(id, on) + '</div>';
+  const num = (id, label, val, min, max, hint) =>
+    '<div class="field" style="margin-top:12px"><label>' + label + (hint ? ' <span style="color:var(--text-mute);font-weight:400">' + hint + '</span>' : '') + '</label>' +
+    '<input id="' + id + '" type="number" min="' + min + '" max="' + max + '" value="' + val + '" style="max-width:180px"></div>';
+  const sel = (id, label, opts, cur) =>
+    '<div class="field" style="margin-top:12px"><label>' + label + '</label><select id="' + id + '" style="max-width:220px">' +
+    opts.map((o) => '<option value="' + o[0] + '"' + (String(cur) === String(o[0]) ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
+    '</select></div>';
 
-  ['f-en', 'f-vip', 'f-share', 'f-leave'].forEach((id) => {
+  $('#fam-cfg').innerHTML =
+    '<div class="cfg-grid">' +
+      '<div class="cfg-col">' +
+        '<h4>\ud83c\udfe0 基础</h4>' +
+        row('f-en', '启用家庭功能', '关闭后前台隐藏家庭入口', cfg.enabled !== false) +
+        row('f-vip', '需会员才能创建', '户主必须是有效会员', cfg.requireVip !== false) +
+        row('f-share', '成员共享会员权益', '户主是会员时，成员同步享受（如去广告）', cfg.shareVip !== false) +
+        row('f-leave', '允许成员主动退出', '关闭后仅户主可移除成员', cfg.allowLeave !== false) +
+        num('f-max', '每户最多成员数', cfg.maxMembers || 5, 1, 20, '（不含户主）') +
+      '</div>' +
+      '<div class="cfg-col">' +
+        '<h4>\ud83d\udcf1 并发与设备</h4>' +
+        num('f-streams', '每成员最大同时在线观看', cfg.maxStreams === undefined ? 2 : cfg.maxStreams, -1, 20, '（0=不限 -1=跟随全局）') +
+        sel('f-policy', '超额策略', [['replace', '顶掉最早会话（推荐）'], ['block', '直接拒绝并提示']], cfg.streamPolicy || 'replace') +
+        num('f-device', '每成员最大绑定设备数', cfg.deviceLimit === undefined ? 3 : cfg.deviceLimit, 0, 50, '（0=不限）') +
+        '<h4 style="margin-top:20px">\ud83c\udfab 额度共享</h4>' +
+        row('f-shareq', '成员可消耗户主额度池', '成员额度耗尽时自动从家庭池扣减', cfg.shareQuota !== false) +
+        num('f-pool', '家庭额度池默认上限', cfg.familyQuotaPool === undefined ? 100 : cfg.familyQuotaPool, -1, 1000000, '（-1=无限）') +
+      '</div>' +
+      '<div class="cfg-col">' +
+        '<h4>\ud83c\udf9f\ufe0f 邀请</h4>' +
+        num('f-ttl', '邀请码默认有效期（天）', cfg.inviteTtlDays || 3, 1, 30) +
+        sel('f-role', '默认角色', [['member', '成员'], ['child', '儿童'], ['guest', '访客'], ['admin', '家庭管理员']], cfg.inviteRole || 'member') +
+        row('f-auto', '邀请码直接通过', '关闭后需户主二次审核', cfg.autoApprove !== false) +
+        '<h4 style="margin-top:20px">\ud83d\udd10 内容分级</h4>' +
+        row('f-parent', '启用儿童分级管控', '儿童/访客账号受内容与功能限制', cfg.parentalEnabled !== false) +
+        sel('f-rating', '儿童内容等级上限', [['G', 'G'], ['PG', 'PG'], ['PG13', 'PG-13'], ['R', 'R'], ['UNRATED', '不限']], cfg.childMaxRating || 'PG13') +
+        row('f-cvip', '儿童禁用超清/下载', '限制增值功能', cfg.childBlockVip !== false) +
+        row('f-ccmt', '儿童禁言', '不能发评论/弹幕', cfg.childBlockComment !== false) +
+      '</div>' +
+    '</div>' +
+    '<button class="btn btn-primary btn-sm" id="f-save" style="margin-top:18px">保存设置</button>';
+
+  ['f-en', 'f-vip', 'f-share', 'f-leave', 'f-shareq', 'f-auto', 'f-parent', 'f-cvip', 'f-ccmt'].forEach((id) => {
     const el = $('#' + id);
     if (el) el.onclick = () => el.classList.toggle('on');
   });
@@ -1136,7 +1330,19 @@ async function viewFamilies(c) {
       requireVip: $('#f-vip').classList.contains('on'),
       shareVip: $('#f-share').classList.contains('on'),
       allowLeave: $('#f-leave').classList.contains('on'),
+      shareQuota: $('#f-shareq').classList.contains('on'),
+      autoApprove: $('#f-auto').classList.contains('on'),
+      parentalEnabled: $('#f-parent').classList.contains('on'),
+      childBlockVip: $('#f-cvip').classList.contains('on'),
+      childBlockComment: $('#f-ccmt').classList.contains('on'),
       maxMembers: +$('#f-max').value || 5,
+      maxStreams: +$('#f-streams').value || 0,
+      deviceLimit: +$('#f-device').value || 0,
+      streamPolicy: $('#f-policy').value,
+      familyQuotaPool: +$('#f-pool').value || 0,
+      inviteTtlDays: +$('#f-ttl').value || 3,
+      inviteRole: $('#f-role').value,
+      childMaxRating: $('#f-rating').value,
     };
     app.settings.family = await API('/api/admin/family', { method: 'PUT', body });
     toast('已保存', 'ok');
@@ -1144,10 +1350,12 @@ async function viewFamilies(c) {
 
   const d = await API('/api/admin/families');
   $('#fam-list').innerHTML = d.families.length
-    ? '<div class="table-wrap"><table class="table"><thead><tr><th>家庭名</th><th>户主</th><th>成员</th><th>创建时间</th><th style="width:90px">操作</th></tr></thead><tbody>' +
+    ? '<div class="table-wrap"><table class="table"><thead><tr><th>家庭名</th><th>户主</th><th>成员</th><th>设备</th><th>额度池</th><th>创建时间</th><th style="width:90px">操作</th></tr></thead><tbody>' +
       d.families.map((f) =>
         '<tr><td class="name">' + esc(f.name) + '</td><td>' + esc(f.ownerNickname) + ' <span style="color:var(--text-mute);font-size:12px">@' + esc(f.owner) + '</span></td>' +
-        '<td>' + f.count + ' / ' + f.max + '</td>' +
+        '<td>' + f.count + ' / ' + f.max + (f.pending ? ' <span style="color:#f59e0b;font-size:11px">+' + f.pending + '待审</span>' : '') + '</td>' +
+        '<td>' + (f.devices || 0) + ' 台</td>' +
+        '<td>' + ((Number(f.quotaPool) || 0) === -1 ? '∞' : (Number(f.quotaPool) || 0)) + ' <span style="color:var(--text-mute);font-size:11px">用 ' + (Number(f.poolUsed) || 0) + '</span></td>' +
         '<td style="font-size:12px;color:var(--text-mute)">' + new Date(f.createdAt).toLocaleDateString('zh-CN') + '</td>' +
         '<td><button class="btn btn-danger btn-sm" data-delfam="' + f.id + '">解散</button></td></tr>'
       ).join('') + '</tbody></table></div>'

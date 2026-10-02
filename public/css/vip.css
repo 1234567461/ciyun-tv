@@ -350,6 +350,90 @@
   font-size: 12px; color: var(--text-mute);
 }
 
+/* ---------------------------- 我的额度 ---------------------------- */
+.quota-wrap { display: grid; gap: 16px; }
+.quota-loading { padding: 40px; text-align: center; color: var(--text-mute); font-size: 13px; }
+
+.quota-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.quota-item {
+  padding: 20px 22px; border-radius: 14px;
+  background: var(--bg-card, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+}
+.quota-item.q-times { border-color: rgba(96, 165, 250, 0.28); background: rgba(96, 165, 250, 0.06); }
+.quota-item .qi-k { font-size: 12px; color: var(--text-mute); margin-bottom: 8px; }
+.quota-item .qi-v { font-size: 32px; font-weight: 900; line-height: 1.1; color: var(--text); }
+.quota-item.q-times .qi-v { color: #60a5fa; }
+.quota-item .qi-sub { font-size: 12px; color: var(--text-mute); margin-top: 8px; }
+
+.quota-usage {
+  display: flex; gap: 18px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-mute);
+  padding: 0 2px;
+}
+.quota-usage .unl { color: #f5c542; font-weight: 700; }
+
+.quota-cost-card, .quota-log-card {
+  background: var(--bg-card, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  border-radius: 14px; padding: 22px 24px;
+}
+.quota-cost-card h3, .quota-log-card h3 { margin: 0 0 16px; font-size: 15px; }
+.qc-list { display: grid; gap: 10px; }
+.qc-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03); font-size: 13px;
+}
+.qc-row b { color: #f5c542; font-weight: 700; }
+.qc-acts { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+
+.ql-list { display: grid; gap: 8px; }
+.ql-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 14px;
+  padding: 11px 14px; border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.ql-reason { font-size: 13px; color: var(--text); }
+.ql-time { font-size: 11px; color: var(--text-mute); margin-top: 3px; }
+.ql-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.ql-dim { font-size: 11px; color: var(--text-mute); }
+.ql-delta { font-size: 15px; font-weight: 800; min-width: 46px; text-align: right; }
+.ql-delta.up { color: #22c55e; }
+.ql-delta.down { color: #f59e0b; }
+.ql-delta.flat { color: var(--text-mute); }
+
+.empty.small { padding: 24px; }
+.empty.small .t { font-size: 13px; }
+
+/* 兑换码类型标签 */
+.rd-kinds { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 14px; }
+.rd-kinds .rk {
+  font-size: 12px; padding: 5px 12px; border-radius: 99px;
+  background: rgba(245, 197, 66, 0.1); color: #f5c542;
+  border: 1px solid rgba(245, 197, 66, 0.22);
+}
+
+/* 播放页额度拦截引导 */
+.quota-gate {
+  max-width: 460px; margin: 60px auto; text-align: center;
+  background: var(--bg-card, rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(245, 197, 66, 0.3);
+  border-radius: 18px; padding: 42px 32px;
+}
+.quota-gate .qg-ic { font-size: 46px; margin-bottom: 16px; }
+.quota-gate h2 { margin: 0 0 10px; font-size: 21px; }
+.quota-gate p { margin: 0 0 20px; color: var(--text-mute); font-size: 14px; line-height: 1.7; }
+.quota-gate .qg-stat {
+  display: flex; justify-content: center; gap: 28px; flex-wrap: wrap;
+  margin: 0 0 24px; padding: 16px; border-radius: 12px;
+  background: rgba(245, 197, 66, 0.06);
+}
+.quota-gate .qg-stat > div { text-align: center; }
+.quota-gate .qg-stat .k { font-size: 11px; color: var(--text-mute); margin-bottom: 4px; }
+.quota-gate .qg-stat .v { font-size: 22px; font-weight: 900; color: #f5c542; }
+.quota-gate .qg-acts { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
 /* ---------------------------- 响应式 ---------------------------- */
 @media (max-width: 720px) {
   .vip-hero { flex-direction: column; align-items: stretch; padding: 22px; }

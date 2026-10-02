@@ -527,6 +527,51 @@ async function pageColumn(root, colId, page) {
 /* ============================================================
    播放页
    ============================================================ */
+/** 额度不足时的引导页 */
+function renderQuotaGate(main, d, guid) {
+  const q = d.quota || {};
+  const back = '#/watch/' + guid;
+  const needLogin = !!d.needLogin;
+
+  const acts = needLogin
+    ? [h('a', { class: 'btn btn-primary', href: '#/login?redirect=' + encodeURIComponent(back), text: '🔑 立即登录' })]
+    : [
+        d.redeemEnabled
+          ? h('a', { class: 'btn btn-primary', href: '#/vip?tab=redeem', text: '🎁 兑换额度' })
+          : null,
+        h('a', { class: 'btn btn-ghost', href: '#/vip?tab=plans', text: '💎 开通会员' }),
+      ].filter(Boolean);
+
+  main.appendChild(
+    h('div', { class: 'quota-gate' }, [
+      h('div', { class: 'qg-ic', text: needLogin ? '🔒' : '🎟️' }),
+      h('h2', { text: needLogin ? '请先登录后观看' : '观看额度已用完' }),
+      h('p', {
+        text: needLogin
+          ? '本站已开启观看额度管理，登录后可享受每日免费额度，也可通过兑换码获取更多额度。'
+          : d.error || '当前账号的观看次数与点数均已用完，可通过兑换码获取额度或开通会员无限观看。',
+      }),
+      !needLogin
+        ? h('div', { class: 'qg-stat' }, [
+            q.times !== undefined
+              ? h('div', {}, [h('div', { class: 'k', text: '观看次数' }), h('div', { class: 'v', text: q.timesText !== undefined ? q.timesText : String(q.times) })])
+              : null,
+            q.points !== undefined
+              ? h('div', {}, [h('div', { class: 'k', text: '通用点数' }), h('div', { class: 'v', text: q.pointsText !== undefined ? q.pointsText : String(q.points) })])
+              : null,
+            q.freeRemain !== undefined && q.freeRemain >= 0
+              ? h('div', {}, [h('div', { class: 'k', text: '今日免费剩余' }), h('div', { class: 'v', text: String(q.freeRemain) })])
+              : null,
+          ])
+        : null,
+      h('div', { class: 'qg-acts' }, acts),
+      h('div', { style: { marginTop: '22px' } }, [
+        h('a', { class: 'btn btn-ghost btn-sm', href: '#/', text: '返回首页' }),
+      ]),
+    ])
+  );
+}
+
 async function pageWatch(root, guid) {
   const { params } = parseRoute();
   const main = h('div', { class: 'player-page' });
@@ -541,8 +586,14 @@ async function pageWatch(root, guid) {
   try {
     info = await api('/api/video/' + guid);
   } catch (e) {
+    const d = (e && e.data) || {};
     main.innerHTML = '';
-    main.appendChild(h('div', { class: 'error-box', text: '无法播放该视频：' + (e.data && e.data.message ? e.data.message : e.message) }));
+    // 额度拦截 → 引导页
+    if (d.needQuota || d.needLogin) {
+      renderQuotaGate(main, d, guid);
+      return;
+    }
+    main.appendChild(h('div', { class: 'error-box', text: '无法播放该视频：' + (d.message ? d.message : e.message) }));
     main.appendChild(h('div', { style: { padding: '0 40px' } }, [h('a', { class: 'btn btn-ghost', href: '#/', text: '返回首页' })]));
     return;
   }

@@ -13,6 +13,7 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
@@ -53,8 +54,11 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true }));
+// ⚠️ 短视频上传走 multipart，必须跳过 JSON/urlencoded 解析器：
+//    这两个中间件会消费请求流，导致后续路由拿不到 body（表现为「文件为空」）
+const SKIP_BODY_PARSE = /^\/api\/shorts\/upload\b/;
+app.use((req, res, next) => (SKIP_BODY_PARSE.test(req.path) ? next() : express.json({ limit: '2mb' })(req, res, next)));
+app.use((req, res, next) => (SKIP_BODY_PARSE.test(req.path) ? next() : express.urlencoded({ extended: true })(req, res, next)));
 app.use(cookieParser());
 
 /** 取客户端真实 IP（兼容反代） */
@@ -3591,6 +3595,10 @@ app.post(
     try {
       const r = await receiveMultipart(req, upload, boundary);
       tmpPath = r.tmpPath;
+      if (process.env.UPLOAD_DEBUG) {
+        console.log('[upload-debug] boundary=%j fields=%j file=%j size=%d tmp=%s',
+          boundary, Object.keys(r.fields), r.file && r.file.filename, (r.file && r.file.size) || 0, tmpPath);
+      }
 
       // 字段校验
       const title = String(r.fields.title || '').trim().slice(0, 80);
@@ -3670,11 +3678,14 @@ function receiveMultipart(req, upload, boundary) {
     let curFilename = '';
     let curCT = '';
     let done = false;
+    let drainP = null;   // 文件写入流的落盘 Promise（必须等它完成才能读文件）
 
     const finish = async () => {
       if (done) return;
       done = true;
-      if (ws) await new Promise((r) => ws.end(r));
+      // ⚠️ 必须等写入流真正 flush + close，否则 validateUpload 读到的 size 是 0
+      if (drainP) { try { await drainP; } catch {} }
+      else if (ws) { try { await new Promise((r) => ws.end(r)); } catch {} }
       resolve({ fields, file, tmpPath });
     };
 
@@ -3755,7 +3766,9 @@ function receiveMultipart(req, upload, boundary) {
           buf = buf.slice(i + bufBoundary.length);
           if (ws) {
             file.size = written;
-            ws.end();
+            // 记录落盘 Promise，finish() 会等它结束（否则文件 size 可能仍为 0）
+            const cur = ws;
+            drainP = new Promise((r) => cur.end(r));
             ws = null;
           }
           if (buf.slice(0, 2).toString() === '--') return finish();

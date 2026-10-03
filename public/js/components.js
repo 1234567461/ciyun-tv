@@ -268,3 +268,116 @@ export function showAnnouncement(text) {
 
   requestAnimationFrame(() => mask.classList.add('ann-in'));
 }
+
+/* ============================================================
+   顶部滚动公告栏
+   ------------------------------------------------------------
+   · 常驻在页头下方，逐条横向滚动播报（跑马灯）
+   · 单条时静态展示，不滚动
+   · 用户可点「×」收起（按内容指纹记忆，公告变更后重新出现）
+   ============================================================ */
+
+const BAR_OFF = 'cy_annbar_closed';   // 被用户收起的公告指纹
+
+let _annBar = null;      // 当前挂载的公告栏元素
+let _annBarTimer = null; // 滚动定时器
+
+/**
+ * 渲染/更新顶部滚动公告栏
+ * @param {string} text 公告正文（\n 分行）
+ */
+export function renderAnnounceBar(text) {
+  const raw = String(text || '').trim();
+
+  // 公告为空 → 移除已有公告栏
+  if (!raw) return clearAnnounceBar();
+
+  const items = raw.split('\n').map((s) => s.trim()).filter(Boolean);
+  if (!items.length) return clearAnnounceBar();
+
+  const fingerprint = hashStr(raw);
+  let closed = '';
+  try { closed = localStorage.getItem(BAR_OFF) || ''; } catch {}
+  if (closed === fingerprint) return clearAnnounceBar(); // 用户已收起这条公告
+
+  // 内容未变则复用，避免每次轮询都重建 DOM（重建会打断滚动位置）
+  if (_annBar && _annBar.dataset.fp === fingerprint) return;
+
+  clearAnnounceBar();
+
+  const track = h('div', { class: 'annbar-track' });
+  items.forEach((line, i) => {
+    track.appendChild(
+      h('span', { class: 'annbar-item' }, [
+        h('i', { class: 'annbar-dot' }),
+        h('span', { text: line }),
+        i < items.length - 1 ? h('span', { class: 'annbar-sep', text: '　·　' }) : null,
+      ])
+    );
+  });
+
+  const closeBtn = h('button', {
+    class: 'annbar-x', html: '&times;', title: '收起公告', 'aria-label': '收起公告',
+    onclick: () => {
+      try { localStorage.setItem(BAR_OFF, fingerprint); } catch {}
+      clearAnnounceBar();
+    },
+  });
+
+  const bar = h('div', { class: 'annbar', role: 'marquee' }, [
+    h('span', { class: 'annbar-ico', text: '📢' }),
+    h('div', { class: 'annbar-view' }, [track]),
+    closeBtn,
+  ]);
+  bar.dataset.fp = fingerprint;
+
+  // 挂到页头之后（找不到页头则挂到 body 顶部）
+  const anchor = document.querySelector('.site-header') || document.body.firstChild;
+  if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(bar, anchor.nextSibling);
+  else document.body.insertBefore(bar, document.body.firstChild);
+
+  _annBar = bar;
+
+  // 内容超出可视宽度才滚动（短内容静态展示，避免无意义的跑马灯）
+  requestAnimationFrame(() => {
+    const view = bar.querySelector('.annbar-view');
+    if (!view || !view.clientWidth) return;
+    const overflow = track.scrollWidth - view.clientWidth;
+    if (overflow > 8) {
+      track.style.setProperty('--ann-shift', '-' + (overflow + 24) + 'px');
+      track.style.animationDuration = Math.max(9, Math.round((overflow + 300) / 46)) + 's';
+      track.classList.add('running');
+    }
+  });
+}
+
+/** 移除公告栏并清理定时器 */
+export function clearAnnounceBar() {
+  if (_annBarTimer) { clearInterval(_annBarTimer); _annBarTimer = null; }
+  if (_annBar) {
+    const t = _annBar.querySelector('.annbar-track');
+    if (t) t.classList.remove('running');
+    _annBar.remove();
+    _annBar = null;
+  }
+}
+
+/**
+ * 从站点/监控接口拉取公告并同步到「弹窗 + 顶部滚动栏」两处
+ * @param {string} fallbackText 站点设置里的公告（作为兜底）
+ */
+export async function syncAnnouncement(fallbackText) {
+  let text = String(fallbackText || '').trim();
+  try {
+    const r = await fetch('/api/announcement', { headers: { Accept: 'application/json' } });
+    if (r.ok) {
+      const d = await r.json();
+      const remote = (d && d.announcement) || '';
+      if (remote.trim()) text = remote.trim();
+    }
+  } catch { /* 拉取失败用兜底 */ }
+
+  showAnnouncement(text);   // 首次/有更新时弹窗
+  renderAnnounceBar(text);  // 顶部滚动栏（可收起）
+  return text;
+}

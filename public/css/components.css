@@ -383,6 +383,61 @@
 }
 
 /* ============================================================
+   顶部滚动公告栏（跑马灯）
+   ============================================================ */
+.annbar {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 14px;
+  height: 40px;
+  background: linear-gradient(90deg, rgba(229,9,20,.16), rgba(229,9,20,.06) 55%, transparent);
+  border-bottom: 1px solid rgba(229,9,20,.22);
+  overflow: hidden;
+}
+.annbar-ico { flex: none; font-size: 15px; }
+.annbar-view {
+  flex: 1; min-width: 0; overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+}
+.annbar-track {
+  display: inline-flex; align-items: center; white-space: nowrap;
+  will-change: transform;
+  animation: annbar-run linear infinite;
+  animation-play-state: paused;
+}
+.annbar-track.running { animation-play-state: running; }
+@keyframes annbar-run {
+  from { transform: translateX(0); }
+  to   { transform: translateX(var(--ann-shift, -60%)); }
+}
+/* 悬停暂停，方便阅读 */
+.annbar:hover .annbar-track.running { animation-play-state: paused; }
+
+.annbar-item {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 13.2px; color: var(--text, #eeeef5);
+}
+.annbar-dot {
+  width: 5px; height: 5px; border-radius: 50%; flex: none;
+  background: var(--brand, #e50914);
+  box-shadow: 0 0 6px rgba(229,9,20,.75);
+}
+.annbar-item .annbar-sep { color: var(--text-dim, #5f5f70); }
+
+.annbar-x {
+  flex: none; background: none; border: none; cursor: pointer;
+  color: var(--text-mute, #8b8b9c); font-size: 19px; line-height: 1;
+  padding: 0 2px; transition: color .15s;
+}
+.annbar-x:hover { color: var(--text, #eeeef5); }
+
+@media (max-width: 560px) {
+  .annbar { height: 36px; padding: 0 10px; gap: 8px; }
+  .annbar-item { font-size: 12.4px; }
+}
+
+/* ============================================================
    社交：加好友 / 私信
    ============================================================ */
 .soc-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border, rgba(255,255,255,.08)); margin-bottom: 18px; flex-wrap: wrap; }
@@ -482,4 +537,255 @@
   .soc-chat.has-open .soc-chatbox { display: flex; }
   .soc-back { display: block; }
   .soc-msg { max-width: 86%; }
+}
+
+/* ============================================================
+   短视频（小型 B 站）
+   ============================================================ */
+
+/* ---------- 竖屏刷视频流 ---------- */
+.sh-feed-wrap {
+  position: fixed; inset: 0; z-index: 60;
+  background: #000;
+  display: flex; flex-direction: column;
+  overscroll-behavior: contain;
+}
+.sh-feed-head {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, rgba(0,0,0,.62), transparent);
+  pointer-events: none;
+}
+.sh-feed-head > * { pointer-events: auto; }
+.sh-fh-title { flex: 1; text-align: center; font-size: 15px; font-weight: 600; color: #fff; }
+.sh-fh-btn {
+  background: rgba(255,255,255,.14); border: none; color: #fff;
+  border-radius: 20px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  backdrop-filter: blur(8px); transition: .18s; display: inline-flex; align-items: center; gap: 4px;
+}
+.sh-fh-btn:hover { background: rgba(255,255,255,.24); }
+.sh-fh-pub { background: var(--brand, #e50914); }
+.sh-fh-pub:hover { background: #c40812; }
+
+.sh-stage { flex: 1; position: relative; overflow: hidden; }
+.sh-card {
+  position: absolute; inset: 0;
+  display: none; align-items: center; justify-content: center;
+  background: #000;
+}
+.sh-card.on { display: flex; }
+.sh-video {
+  width: 100%; height: 100%; object-fit: contain; background: #000;
+  cursor: pointer;
+}
+.sh-play-ic {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) scale(.82);
+  width: 62px; height: 62px; border-radius: 50%;
+  background: rgba(0,0,0,.42); color: #fff; font-size: 22px;
+  display: grid; place-items: center; opacity: 0; transition: opacity .25s, transform .25s;
+  pointer-events: none; backdrop-filter: blur(4px);
+}
+.sh-card:not(.playing) .sh-play-ic { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+
+.sh-overlay {
+  position: absolute; inset: auto 0 0 0;
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 14px;
+  padding: 60px 16px 26px;
+  background: linear-gradient(0deg, rgba(0,0,0,.74), transparent);
+  pointer-events: none;
+}
+.sh-info { flex: 1; min-width: 0; color: #fff; pointer-events: auto; }
+.sh-author { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sh-name { font-size: 14px; font-weight: 600; }
+.sh-time { font-size: 11.5px; color: rgba(255,255,255,.65); }
+.sh-title { font-size: 15.5px; font-weight: 600; line-height: 1.45; margin-bottom: 5px; word-break: break-word; }
+.sh-desc { font-size: 13px; color: rgba(255,255,255,.82); line-height: 1.55; margin-bottom: 6px; }
+.sh-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.sh-tag { font-size: 12px; color: #7dd3fc; }
+
+.sh-side {
+  flex: none; display: flex; flex-direction: column; align-items: center; gap: 16px;
+  pointer-events: auto;
+}
+.sh-side-btn {
+  background: none; border: none; color: #fff; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 0; transition: transform .16s;
+}
+.sh-side-btn:hover { transform: scale(1.11); }
+.sh-side-btn.pop { animation: sh-pop .32s; }
+@keyframes sh-pop { 50% { transform: scale(1.34); } }
+.sh-side-btn .ic { font-size: 25px; line-height: 1; }
+.sh-side-btn .lb { font-size: 11.5px; color: rgba(255,255,255,.86); }
+
+.sh-progress {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 2.5px;
+  background: rgba(255,255,255,.2);
+}
+.sh-progress i { display: block; height: 100%; width: 0; background: var(--brand, #e50914); transition: width .18s linear; }
+.sh-card.err .sh-play-ic { opacity: 1; }
+
+.sh-feed-loading, .sh-feed-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px; color: rgba(255,255,255,.72);
+  font-size: 14px; text-align: center; padding: 24px;
+}
+.sh-feed-empty .ico { font-size: 46px; }
+.sh-feed-empty .sub { font-size: 13px; color: rgba(255,255,255,.5); }
+.sh-spin {
+  width: 30px; height: 30px; border: 2.5px solid rgba(255,255,255,.2);
+  border-top-color: var(--brand, #e50914); border-radius: 50%;
+  animation: sp .8s linear infinite;
+}
+@keyframes sp { to { transform: rotate(360deg); } }
+
+/* ---------- 网格广场 ---------- */
+.sh-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.sh-toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.sh-sort {
+  background: var(--card, #16161f); border: 1px solid var(--border, rgba(255,255,255,.08));
+  color: var(--text-mute, #8b8b9c); border-radius: 20px; padding: 7px 15px;
+  font-size: 13px; cursor: pointer; transition: .18s;
+}
+.sh-sort:hover { color: var(--text, #eeeef5); border-color: rgba(255,255,255,.2); }
+.sh-sort.on { background: var(--brand, #e50914); color: #fff; border-color: transparent; font-weight: 600; }
+
+.sh-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+.sh-gcard {
+  background: var(--card, #16161f); border: 1px solid var(--border, rgba(255,255,255,.08));
+  border-radius: 12px; overflow: hidden; cursor: pointer;
+  transition: transform .2s, border-color .2s, box-shadow .2s;
+}
+.sh-gcard:hover {
+  transform: translateY(-3px); border-color: rgba(229,9,20,.42);
+  box-shadow: 0 10px 26px rgba(0,0,0,.34);
+}
+.sh-gcover { position: relative; aspect-ratio: 3/4; overflow: hidden; background: #000; }
+.sh-gimg {
+  width: 100%; height: 100%; background-size: cover; background-position: center;
+  transition: transform .35s;
+}
+.sh-gcard:hover .sh-gimg { transform: scale(1.05); }
+.sh-cover-ph { display: grid; place-items: center; }
+.sh-ph-t { font-size: 26px; font-weight: 700; color: rgba(255,255,255,.55); letter-spacing: 2px; }
+.sh-gdur, .sh-gviews, .sh-gpending {
+  position: absolute; font-size: 11.5px; padding: 2px 7px; border-radius: 5px;
+  background: rgba(0,0,0,.62); color: #fff; backdrop-filter: blur(4px);
+}
+.sh-gdur { right: 7px; bottom: 7px; }
+.sh-gviews { left: 7px; bottom: 7px; }
+.sh-gpending { left: 7px; top: 7px; background: rgba(245,158,11,.9); }
+
+.sh-gmeta { padding: 11px 12px 13px; }
+.sh-gtitle {
+  font-size: 13.8px; font-weight: 600; line-height: 1.45; color: var(--text, #eeeef5);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; margin-bottom: 6px; min-height: 2.9em;
+}
+.sh-gsub { font-size: 11.8px; color: var(--text-mute, #8b8b9c); display: flex; gap: 5px; margin-bottom: 6px; }
+.sh-gsub .dot { color: var(--text-dim, #5f5f70); }
+.sh-gstat { display: flex; gap: 12px; font-size: 11.8px; color: var(--text-dim, #5f5f70); }
+
+.sh-grid-skl { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); width: 100%; }
+.sh-grid-skl i {
+  display: block; aspect-ratio: 3/4; border-radius: 12px;
+  background: linear-gradient(100deg, rgba(255,255,255,.05) 30%, rgba(255,255,255,.11) 50%, rgba(255,255,255,.05) 70%);
+  background-size: 220% 100%; animation: sh-shim 1.4s infinite;
+}
+@keyframes sh-shim { to { background-position: -200% 0; } }
+.sh-more { text-align: center; margin-top: 26px; }
+.sh-loading { text-align: center; color: var(--text-mute, #8b8b9c); font-size: 13px; padding: 28px; }
+
+/* ---------- 详情页 ---------- */
+.sh-detail { max-width: 1080px; margin: 0 auto; }
+.sh-back {
+  background: none; border: none; color: var(--text-mute, #8b8b9c);
+  font-size: 14px; cursor: pointer; padding: 6px 0; margin-bottom: 14px;
+}
+.sh-back:hover { color: var(--text, #eeeef5); }
+.sh-detail-body {
+  display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 26px; align-items: start;
+}
+.sh-detail-video {
+  width: 100%; max-height: 74vh; background: #000; border-radius: 14px;
+  display: block;
+}
+.sh-detail-side { min-width: 0; }
+.sh-detail-title { font-size: 18px; font-weight: 700; margin: 14px 0 8px; line-height: 1.5; }
+.sh-detail-desc { font-size: 13.8px; color: var(--text-mute, #8b8b9c); line-height: 1.7; margin-bottom: 12px; white-space: pre-wrap; }
+.sh-detail-acts { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 4px; }
+.sh-dact {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--card, #16161f); border: 1px solid var(--border, rgba(255,255,255,.08));
+  color: var(--text, #eeeef5); border-radius: 20px; padding: 7px 15px;
+  font-size: 13px; cursor: pointer; transition: .18s;
+}
+.sh-dact:hover { border-color: rgba(255,255,255,.2); }
+.sh-dact.on { background: rgba(229,9,20,.16); border-color: rgba(229,9,20,.42); color: #ff6b6b; }
+.sh-dact.danger:hover { background: rgba(239,68,68,.14); border-color: rgba(239,68,68,.4); color: #f87171; }
+.sh-comments { margin-top: 20px; }
+.sh-cmt-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+
+/* ---------- 上传页 ---------- */
+.sh-upload { max-width: 720px; margin: 0 auto; }
+.sh-drop {
+  border: 2px dashed var(--border, rgba(255,255,255,.14)); border-radius: 14px;
+  padding: 40px 20px; text-align: center; cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+.sh-drop:hover, .sh-drop.drag { border-color: var(--brand, #e50914); background: rgba(229,9,20,.05); }
+.sh-drop.has-file { border-style: solid; border-color: rgba(34,197,94,.42); background: rgba(34,197,94,.05); }
+.sh-drop-ico { font-size: 42px; margin-bottom: 12px; }
+.sh-drop-t { font-size: 14.5px; font-weight: 600; margin-bottom: 6px; word-break: break-all; }
+.sh-drop-s { font-size: 12.5px; color: var(--text-mute, #8b8b9c); }
+
+.sh-preview { margin-top: 16px; }
+.sh-preview-video { width: 100%; max-height: 340px; background: #000; border-radius: 11px; display: block; }
+.sh-preview-name {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 12.5px; color: var(--text-mute, #8b8b9c); margin-top: 8px;
+}
+.sh-preview-name .sz { flex: none; }
+
+.sh-form { margin-top: 20px; }
+.sh-lb { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 7px; }
+.sh-input {
+  width: 100%; background: var(--bg, #0d0d12); border: 1px solid var(--border, rgba(255,255,255,.08));
+  border-radius: 9px; color: var(--text, #eeeef5); padding: 11px 13px;
+  font-size: 13.8px; font-family: inherit; outline: none; transition: border-color .18s;
+  resize: vertical;
+}
+.sh-input:focus { border-color: var(--brand, #e50914); }
+
+.sh-upload-foot {
+  display: flex; align-items: center; gap: 14px; margin-top: 22px; flex-wrap: wrap;
+}
+.sh-tip { flex: 1; font-size: 12.5px; color: var(--warn, #f59e0b); }
+
+.sh-progress-box { margin-top: 16px; }
+.sh-prog-row { }
+.sh-prog-bar {
+  height: 7px; border-radius: 5px; background: rgba(255,255,255,.1); overflow: hidden;
+}
+.sh-prog-bar i {
+  display: block; height: 100%; width: 0; border-radius: 5px;
+  background: linear-gradient(90deg, var(--brand, #e50914), #ff6b6b);
+  transition: width .22s ease;
+}
+.sh-prog-txt { font-size: 12.8px; color: var(--text-mute, #8b8b9c); margin-top: 9px; }
+
+@media (max-width: 860px) {
+  .sh-detail-body { grid-template-columns: 1fr; }
+  .sh-detail-video { max-height: 52vh; }
+  .sh-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .sh-gtitle { font-size: 13px; }
+  .sh-overlay { padding: 52px 12px 20px; }
+  .sh-side-btn .ic { font-size: 23px; }
 }

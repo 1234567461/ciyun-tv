@@ -82,9 +82,9 @@ app.use((req, res, next) => {
  * 未部署监控 / 不可达时，回退站点设置里的 announcement，不影响主流程。
  */
 app.get('/api/announcement', async (req, res) => {
-  const fallback = (store.settings && store.settings.announcement) || '';
-  const statusUrl = process.env.STATUS_URL || req.app.get('statusUrl');
-  if (!statusUrl) return res.json({ announcement: fallback, source: 'local' });
+  const local = buildLocalAnnouncement();
+  const statusUrl = resolveStatusUrl(req);
+  if (!statusUrl) return res.json({ ...local, source: 'local' });
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 3000);
@@ -92,12 +92,63 @@ app.get('/api/announcement', async (req, res) => {
     clearTimeout(t);
     if (!r.ok) throw new Error('status ' + r.status);
     const d = await r.json();
-    const text = (d && d.announcement) || '';
-    return res.json({ announcement: text || fallback, source: text ? 'remote' : 'local' });
+    const text = String((d && (d.announcement || d.text)) || '').trim();
+    if (!text) return res.json({ ...local, source: 'local' });
+    return res.json({
+      announcement: text,
+      scroll: d.scroll !== false,
+      popup: d.popup !== false,
+      level: d.level || 'info',
+      updatedAt: d.updatedAt || Date.now(),
+      source: 'remote',
+    });
   } catch {
-    return res.json({ announcement: fallback, source: 'local' });
+    return res.json({ ...local, source: 'local' });
   }
 });
+
+/**
+ * 解析配套监控服务的地址（用于拉取公告 / 状态）
+ * 优先级：环境变量 STATUS_URL > 后台「站点设置」里的 statusUrl > app 级设置
+ */
+function resolveStatusUrl(req) {
+  const env = process.env.STATUS_URL || process.env.MONITOR_URL;
+  if (env) return String(env).trim();
+  const fromStore = store.settings && (store.settings.statusUrl || store.settings.monitorUrl);
+  if (fromStore) return String(fromStore).trim();
+  return req.app.get('statusUrl') || '';
+}
+
+/**
+ * 本地公告（后台可直接管理，不依赖监控服务）
+ * settings.announcementItems: [{ id, text, enabled, scroll, popup, level, startAt, endAt }]
+ * 兼容老的 settings.announcement 纯文本字段。
+ */
+function buildLocalAnnouncement() {
+  const s = store.settings || {};
+  const now = Date.now();
+  const items = Array.isArray(s.announcementItems) ? s.announcementItems : [];
+  const live = items.filter((it) => {
+    if (!it || it.enabled === false) return false;
+    const text = String(it.text || '').trim();
+    if (!text) return false;
+    if (it.startAt && now < Date.parse(it.startAt)) return false;
+    if (it.endAt && now > Date.parse(it.endAt)) return false;
+    return true;
+  });
+  if (live.length) {
+    return {
+      announcement: live.map((it) => String(it.text).trim()).join('\n'),
+      scroll: live.some((it) => it.scroll !== false),
+      popup: live.some((it) => it.popup !== false),
+      level: live[0].level || 'info',
+      updatedAt: now,
+    };
+  }
+  // 回退旧字段
+  const legacy = String(s.announcement || '').trim();
+  return { announcement: legacy, scroll: true, popup: true, level: 'info', updatedAt: now };
+}
 
 app.get('/api/site', (req, res) => {
   const s = store.settings;
@@ -890,7 +941,99 @@ function safeSettingsView(s) {
 app.get('/api/admin/settings', requireAdmin, (req, res) => {
   res.json(safeSettingsView(store.settings));
 });
-app.put('/api/admin/settings', requireAdmin, (req, res) => {
+
+/* ============================================================
+ * 管理后台：公告管理
+ * ------------------------------------------------------------
+ * 支持多条公告：每条可单独控制 启用 / 顶部滚动 / 弹窗 / 级别 / 生效时间
+ * 存于 settings.announcementItems，前台通过 /api/announcement 读取。
+ * ============================================================ */
+const ANN_LEVELS = ['info', 'success', 'warn', 'danger'];
+
+/** 规范化单条公告（清洗 + 兜底） */
+function normalizeAnnItem(raw) {
+  const it = raw && typeof raw === 'object' ? raw : {};
+  const text = String(it.text || '').trim().slice(0, 1000);
+  const lv = ANN_LEVELS.includes(it.level) ? it.level : 'info';
+  const clean = (d) => {
+    if (!d) return '';
+    const t = Date.parse(d);
+    return Number.isFinite(t) ? new Date(t).toISOString() : '';
+  };
+  return {
+    id: String(it.id || 'ann_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
+    text,
+    enabled: it.enabled !== false,
+    scroll: it.scroll !== false,
+    popup: it.popup !== false,
+    level: lv,
+    startAt: clean(it.startAt),
+    endAt: clean(it.endAt),
+  };
+}
+
+app.get('/api/admin/announcements', requireAdmin, (req, res) => {
+  const items = Array.isArray(store.settings.announcementItems) ? store.settings.announcementItems : [];
+  res.json({
+    items,
+    legacyText: String(store.settings.announcement || ''),
+    /** 当前实际生效的文案（含监控端覆盖），供后台预览 */
+    effective: buildLocalAnnouncement(),
+  });
+});
+
+app.put('/api/admin/announcements', requireAdmin, (req, res) => {
+  const body = req.body || {};
+  if (!Array.isArray(body.items)) return res.status(400).json({ error: 'items 必须是数组' });
+  if (body.items.length > 30) return res.status(400).json({ error: '公告最多 30 条' });
+
+  const items = body.items.map(normalizeAnnItem).filter((it) => it.text);
+  const patch = { announcementItems: items };
+
+  // 同步一份纯文本到老字段，保证老前端 / 其它消费方仍可用
+  const live = items.filter((it) => it.enabled !== false);
+  patch.announcement = live.map((it) => it.text).join('\n');
+
+  const saved = store.setSettings(patch);
+  res.json({ ok: true, items: saved.announcementItems || [], legacyText: saved.announcement || '' });
+});
+
+/** 快捷：一键启用 / 停用某条 */
+app.post('/api/admin/announcements/:id/toggle', requireAdmin, (req, res) => {
+  const items = Array.isArray(store.settings.announcementItems) ? store.settings.announcementItems.slice() : [];
+  const it = items.find((x) => x && x.id === req.params.id);
+  if (!it) return res.status(404).json({ error: 'not found' });
+  it.enabled = req.body && req.body.enabled !== undefined ? !!req.body.enabled : it.enabled === false;
+  const patch = { announcementItems: items, announcement: items.filter((x) => x.enabled !== false && x.text).map((x) => x.text).join('\n') };
+  store.setSettings(patch);
+  res.json({ ok: true, item: it });
+});
+
+/**
+ * 监控服务连通性测试（服务端发起，避免浏览器跨域限制）
+ * body: { url }  不传则用已保存的 statusUrl
+ */
+app.post('/api/admin/status-check', requireAdmin, async (req, res) => {
+  const url = String((req.body && req.body.url) || '').trim() || (store.settings && store.settings.statusUrl) || '';
+  if (!url) return res.status(400).json({ error: '未填写监控服务地址' });
+  const base = url.replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(base)) return res.status(400).json({ error: '地址需以 http:// 或 https:// 开头' });
+
+  const started = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(base + '/api/announcement', { signal: ctrl.signal });
+    clearTimeout(t);
+    const ms = Date.now() - started;
+    if (!r.ok) return res.json({ ok: false, ms, error: 'HTTP ' + r.status });
+    const d = await r.json().catch(() => ({}));
+    const chars = String(d.announcement || '').trim().length;
+    return res.json({ ok: true, ms, announcementChars: chars });
+  } catch (e) {
+    return res.json({ ok: false, ms: Date.now() - started, error: e.name === 'AbortError' ? '连接超时（5s）' : e.message });
+  }
+});app.put('/api/admin/settings', requireAdmin, (req, res) => {
   const patch = { ...(req.body || {}) };
 
   // 🔒 管理口令：非空才更新，且必须通过强度校验，落库前哈希

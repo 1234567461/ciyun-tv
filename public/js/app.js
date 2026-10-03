@@ -3,7 +3,7 @@
    ============================================================ */
 
 import { h, api, go, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor } from './util.js';
-import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn, showAnnouncement } from './components.js';
+import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn, syncAnnouncement, renderAnnounceBar } from './components.js';
 import { Player, detectType } from './player.js';
 import { auth, avatarEl } from './auth.js';
 import { mountComments } from './comments.js';
@@ -12,6 +12,7 @@ import { createDanmaku, createDanmakuBar } from './danmaku.js';
 import { renderFamilyPage } from './family.js';
 import { renderVipPage } from './vip.js';
 import { renderSocialPage } from './social.js';
+import { renderShortsPage, renderShortDetail, renderUploadPage } from './shorts.js';
 
 const state = {
   site: null,
@@ -40,24 +41,30 @@ async function boot() {
   renderFooter();
   window.addEventListener('hashchange', route);
   route();
-  // 公告弹窗：优先用监控服务下发的最新公告，回退站点设置里的 announcement
-  showAnnouncement(state.site && state.site.announcement);
+
+  // 公告：顶部滚动栏（常驻）+ 弹窗（仅首次/更新时打扰一次）
+  // 先渲染本地公告做成静态兜底，再异步拉监控端最新公告覆盖
+  renderAnnounceBar(state.site && state.site.announcement);
   syncRemoteAnnouncement();
+  // 每 90s 拉一次公告，运营在监控端改完内容，用户无需刷新即可看到
+  setInterval(syncRemoteAnnouncement, 90000);
 }
 
 /**
- * 拉取公告并展示。
+ * 拉取公告并同步到「弹窗 + 顶部滚动栏」。
  * 走主站自身的 /api/announcement 代理（由服务端转发到监控服务），
  * 避免前端跨域问题；监控未部署时服务端回退本地公告。
  * 公告不是核心功能，任何异常都静默跳过。
  */
+let _lastAnnText = null;
 async function syncRemoteAnnouncement() {
   try {
     const d = await api('/api/announcement');
-    const text = (d && d.announcement) || '';
-    if (text && text.trim() !== String((state.site && state.site.announcement) || '').trim()) {
-      showAnnouncement(text);
-    }
+    const text = String((d && d.announcement) || '').trim();
+    if (!text) return;
+    if (text === _lastAnnText) return;   // 未变更则不重复渲染（避免打断跑马灯动画）
+    _lastAnnText = text;
+    await syncAnnouncement(text);
   } catch {
     /* 忽略：公告取不到不影响使用 */
   }
@@ -78,6 +85,7 @@ function renderHeader() {
     { href: '#/resource?type=us', text: '美剧', match: ['/resource'] },
     { href: '#/resource?type=movie', text: '电影', match: ['/resource'] },
     { href: '#/live', text: '电视直播', match: ['/live'] },
+    { href: '#/shorts?view=grid', text: '短视频', match: ['/shorts'] },
     { href: '#/family', text: '家庭共享', match: ['/family'] },
     { href: '#/category/news', text: '新闻', match: ['/category/news'] },
     { href: '#/category/documentary', text: '纪录片', match: ['/category/documentary'] },
@@ -286,6 +294,11 @@ async function route() {
     if (seg[0] === 'family') return renderFamilyPage(root, state.site);
     if (seg[0] === 'vip') return renderVipPage(root, state.site, { tab: params.get('tab') || 'plans' });
     if (seg[0] === 'social') return renderSocialPage(root, params.get('tab') || 'messages');
+    if (seg[0] === 'shorts') {
+      if (seg[1] === 'upload') return renderUploadPage(root);
+      if (seg[1] === 'detail' && seg[2]) return renderShortDetail(root, seg[2]);
+      return renderShortsPage(root, params);
+    }
     if (seg[0] === 'join') return pageJoin(root, params.get('code') || '');
     if (seg[0] === 'u') return pageUserProfile(root, seg[1]);
     return page404(root);

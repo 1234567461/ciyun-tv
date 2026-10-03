@@ -180,6 +180,7 @@ const TABS = [
   { id: 'users', icon: '👥', label: '用户管理' },
   { id: 'families', icon: '👨‍👩‍👧', label: '家庭共享' },
   { id: 'health', icon: '❤️', label: '接口监控' },
+  { id: 'announce', icon: '📢', label: '公告管理' },
   { id: 'monetize', icon: '💎', label: '会员付费' },
   { id: 'settings', icon: '⚙️', label: '站点设置' },
   { id: 'data', icon: '💾', label: '数据备份' },
@@ -221,6 +222,7 @@ function route() {
     users: viewUsers,
     families: viewFamilies,
     health: viewHealth,
+    announce: viewAnnounce,
     monetize: viewMonetize,
     settings: viewSettings,
     data: viewData,
@@ -1356,6 +1358,18 @@ async function viewSettings(c) {
         <div class="field"><label>管理员密码</label><input id="s-pass" type="text" value="${esc(s.adminPassword || 'admin888')}"></div>
         <div style="font-size:12.5px;color:var(--warn)">⚠️ 开源部署时请务必修改默认密码</div>
       </div>
+      <div class="card">
+        <h3>📡 配套监控服务</h3>
+        <div class="field"><label>监控服务地址</label>
+          <input id="s-statusurl" value="${esc(s.statusUrl || '')}" placeholder="http://另一台机器:8899"></div>
+        <div style="font-size:12.5px;color:var(--muted);line-height:1.7">
+          填写后，主站会从该服务拉取<b>公告</b>（可在监控端一处修改、全站生效）。<br>
+          留空则使用本页「公告」字段。也可用环境变量 <code>STATUS_URL</code> 覆盖此设置。
+        </div>
+        <div class="switch-row" style="margin-top:8px"><div><div class="t">监控服务连通性</div>
+          <div class="d" id="s-statusurl-tip">未检测</div></div>
+          <button class="btn btn-sm" id="s-statusurl-test">测试</button></div>
+      </div>
     </div>
     ${communityCard()}
 
@@ -1387,15 +1401,37 @@ async function viewSettings(c) {
   sw('#p-autoq'); sw('#p-failover'); sw('#p-preload');
   bindCommunityCard();
 
+  // 监控服务连通性测试（走服务端代理，避免浏览器跨域限制）
+  $('#s-statusurl-test').onclick = async () => {
+    const tip = $('#s-statusurl-tip');
+    const u = $('#s-statusurl').value.trim();
+    if (!u) { tip.textContent = '请先填写地址'; tip.style.color = 'var(--warn)'; return; }
+    tip.textContent = '检测中…'; tip.style.color = 'var(--text-mute)';
+    try {
+      const r = await API('/api/admin/status-check', { method: 'POST', body: { url: u } });
+      if (r.ok) {
+        tip.textContent = '✅ 连通正常（' + r.ms + 'ms，公告 ' + (r.announcementChars || 0) + ' 字）';
+        tip.style.color = 'var(--ok)';
+      } else {
+        tip.textContent = '❌ 无法连接：' + r.error;
+        tip.style.color = 'var(--err)';
+      }
+    } catch (e) {
+      tip.textContent = '❌ 检测失败：' + e.message;
+      tip.style.color = 'var(--err)';
+    }
+  };
+
   const bar = mountSaveBar({
     title: '站点设置',
     saveText: '保存设置',
-    watch: '#s-name, #s-slogan, #s-notice, #s-mode, #s-primary, #s-accent, #s-admin, #s-pass, #s-smtp-host, #s-smtp-port, #s-smtp-user, #s-smtp-pass, #s-smtp-from, #s-smtp-secure',
+        watch: '#s-name, #s-slogan, #s-notice, #s-mode, #s-primary, #s-accent, #s-admin, #s-pass, #s-statusurl, #s-smtp-host, #s-smtp-port, #s-smtp-user, #s-smtp-pass, #s-smtp-from, #s-smtp-secure',
     onSave: async () => {
       const patch = {
         siteName: $('#s-name').value,
         slogan: $('#s-slogan').value,
         announcement: $('#s-notice').value,
+        statusUrl: $('#s-statusurl').value.trim(),
         adminUsername: $('#s-admin').value,
         adminPassword: $('#s-pass').value,
         theme: { mode: $('#s-mode').value, primary: $('#s-primary').value, accent: $('#s-accent').value },
@@ -1424,6 +1460,184 @@ async function viewSettings(c) {
   $('#settings-savebar').replaceWith(bar.el);
 }
 
+
+/* ============================================================
+   公告管理
+   ------------------------------------------------------------
+   · 多条公告，每条独立控制：启用 / 顶部滚动 / 弹窗 / 级别 / 生效时间
+   · 前台读取 /api/announcement：顶部滚动栏（跑马灯）+ 弹窗
+   · 数据来源优先监控服务，未部署监控时用这里配置的本地公告
+   ============================================================ */
+const ANN_LEVEL_MAP = {
+  info:    { label: '普通', cls: 'lv-info',    dot: 'ℹ️' },
+  success: { label: '成功', cls: 'lv-success', dot: '✅' },
+  warn:    { label: '提醒', cls: 'lv-warn',    dot: '⚠️' },
+  danger:  { label: '重要', cls: 'lv-danger',  dot: '🚨' },
+};
+
+async function viewAnnounce(c) {
+  c.innerHTML = '<div class="page-head"><div><h2>公告管理</h2><div class="sub">发布全站公告：顶部滚动播报 + 弹窗提醒</div></div></div><div id="ann-box"><div class="loading">加载中…</div></div>';
+  let data;
+  try {
+    data = await API('/api/admin/announcements');
+  } catch (e) {
+    $('#ann-box').innerHTML = '<div class="card">加载失败：' + esc(e.message) + '</div>';
+    return;
+  }
+
+  let items = (data.items || []).map((it) => ({ ...it }));
+
+  const render = () => {
+    const box = $('#ann-box');
+    box.innerHTML = `
+      <div class="card" style="margin-bottom:16px">
+        <h3>📡 当前生效的公告<span class="tag">${data.effective && data.effective.source === 'remote' ? '来自监控服务' : '本机配置'}</span></h3>
+        <div class="ann-preview" id="ann-preview">${esc((data.effective && data.effective.announcement) || '（暂无公告）').replace(/\n/g, '<br>')}</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:10px">
+          提示：若已部署配套监控服务，公告会以监控端内容为准；此处配置用于未部署监控或监控不可达时的兜底。
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>📝 公告列表<span class="tag">${items.length} 条</span>
+          <button class="btn btn-sm" id="ann-add" style="margin-left:auto">+ 新增公告</button>
+        </h3>
+        <div id="ann-list"></div>
+      </div>`;
+
+    const list = $('#ann-list');
+    if (!items.length) {
+      list.innerHTML = '<div class="empty-hint">还没有公告，点右上角「新增公告」开始。</div>';
+    } else {
+      list.innerHTML = items.map((it, i) => {
+        const lv = ANN_LEVEL_MAP[it.level] || ANN_LEVEL_MAP.info;
+        return `
+        <div class="ann-row ${it.enabled === false ? 'off' : ''}" data-i="${i}">
+          <div class="ann-row-head">
+            <span class="ann-lv ${lv.cls}">${lv.dot} ${lv.label}</span>
+            <span class="ann-state">${it.enabled === false ? '已停用' : '生效中'}</span>
+            <div class="ann-row-act">
+              <button class="btn btn-sm" data-act="up" title="上移">↑</button>
+              <button class="btn btn-sm" data-act="down" title="下移">↓</button>
+              <button class="btn btn-sm" data-act="del">删除</button>
+            </div>
+          </div>
+          <textarea class="ann-text" rows="2" placeholder="公告内容，可写多行（每行会作为一条独立播报）">${esc(it.text)}</textarea>
+          <div class="ann-opts">
+            <label>级别
+              <select class="ann-level">
+                ${Object.entries(ANN_LEVEL_MAP).map(([k, v]) =>
+                  `<option value="${k}" ${(it.level || 'info') === k ? 'selected' : ''}>${v.dot} ${v.label}</option>`).join('')}
+              </select>
+            </label>
+            <label class="cb"><input type="checkbox" class="ann-enabled" ${it.enabled !== false ? 'checked' : ''}> 启用</label>
+            <label class="cb"><input type="checkbox" class="ann-scroll" ${it.scroll !== false ? 'checked' : ''}> 顶部滚动</label>
+            <label class="cb"><input type="checkbox" class="ann-popup" ${it.popup !== false ? 'checked' : ''}> 弹窗提醒</label>
+          </div>
+          <div class="ann-opts">
+            <label>生效时间 <input type="datetime-local" class="ann-start" value="${toLocalInput(it.startAt)}"></label>
+            <label>失效时间 <input type="datetime-local" class="ann-end" value="${toLocalInput(it.endAt)}"></label>
+            <span style="color:var(--muted);font-size:12px">留空表示立即生效 / 长期有效</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // 收集当前表单状态回 items（避免重渲染丢失未保存的编辑）
+    const collect = () => {
+      $$('.ann-row').forEach((row) => {
+        const i = +row.dataset.i;
+        if (!items[i]) return;
+        items[i].text = $('.ann-text', row).value;
+        items[i].level = $('.ann-level', row).value;
+        items[i].enabled = $('.ann-enabled', row).checked;
+        items[i].scroll = $('.ann-scroll', row).checked;
+        items[i].popup = $('.ann-popup', row).checked;
+        items[i].startAt = fromLocalInput($('.ann-start', row).value);
+        items[i].endAt = fromLocalInput($('.ann-end', row).value);
+      });
+    };
+
+    $('#ann-add').onclick = () => {
+      collect();
+      items.unshift({
+        id: 'ann_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        text: '', enabled: true, scroll: true, popup: true, level: 'info', startAt: '', endAt: '',
+      });
+      render();
+      const first = $('.ann-row .ann-text');
+      if (first) first.focus();
+    };
+
+    list.querySelectorAll('button[data-act]').forEach((b) => {
+      b.onclick = () => {
+        collect();
+        const row = b.closest('.ann-row');
+        const i = +row.dataset.i;
+        const act = b.dataset.act;
+        if (act === 'del') {
+          if (!confirm('确定删除这条公告？')) return;
+          items.splice(i, 1);
+        } else if (act === 'up' && i > 0) {
+          [items[i - 1], items[i]] = [items[i], items[i - 1]];
+        } else if (act === 'down' && i < items.length - 1) {
+          [items[i + 1], items[i]] = [items[i], items[i + 1]];
+        }
+        render();
+      };
+    });
+  };
+
+  render();
+
+  const bar = mountSaveBar({
+    title: '公告管理',
+    saveText: '发布公告',
+    watch: '',
+    onSave: async () => {
+      const rows = $$('.ann-row');
+      rows.forEach((row) => {
+        const i = +row.dataset.i;
+        if (!items[i]) return;
+        items[i].text = $('.ann-text', row).value.trim();
+        items[i].level = $('.ann-level', row).value;
+        items[i].enabled = $('.ann-enabled', row).checked;
+        items[i].scroll = $('.ann-scroll', row).checked;
+        items[i].popup = $('.ann-popup', row).checked;
+        items[i].startAt = fromLocalInput($('.ann-start', row).value);
+        items[i].endAt = fromLocalInput($('.ann-end', row).value);
+      });
+      const payload = items.filter((it) => String(it.text || '').trim());
+      try {
+        const r = await API('/api/admin/announcements', { method: 'PUT', body: { items: payload } });
+        items = (r.items || []).map((it) => ({ ...it }));
+        data.effective = { announcement: r.legacyText || '', source: 'local' };
+        render();
+        toast('公告已发布，用户刷新后即可看到', 'ok');
+        return true;
+      } catch (e) {
+        toast('发布失败：' + e.message, 'err');
+        return false;
+      }
+    },
+  }).el;
+  c.querySelector('#ann-box').after(bar.el);
+}
+
+/** ISO 时间 → datetime-local 输入值（本地时区） */
+function toLocalInput(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t - new Date().getTimezoneOffset() * 60000);
+  return d.toISOString().slice(0, 16);
+}
+/** datetime-local 输入值 → ISO（空则空） */
+function fromLocalInput(v) {
+  if (!v) return '';
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? new Date(t).toISOString() : '';
+}
 
 /* ============================================================
    数据备份

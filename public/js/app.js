@@ -2,7 +2,7 @@
    慈云影视 · 主应用（路由 + 页面）
    ============================================================ */
 
-import { h, api, go, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor } from './util.js';
+import { h, api, go, goReplace, safeRedirect, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor } from './util.js';
 import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn, syncAnnouncement, renderAnnounceBar } from './components.js';
 import { Player, detectType } from './player.js';
 import { auth, avatarEl } from './auth.js';
@@ -115,11 +115,21 @@ function renderHeader() {
     },
   });
 
+  // 📱 移动端汉堡菜单：桌面端 nav 隐藏后，用小屏抽屉承接全部导航
+  const burger = h('button', {
+    class: 'icon-btn nav-burger',
+    title: '菜单',
+    'aria-label': '打开导航菜单',
+    html: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>',
+    onclick: () => openDrawer(navMap),
+  });
+
   header.append(
     h('a', { class: 'logo', href: '#/' }, [
       h('div', { class: 'logo-mark', text: '慈' }),
       h('div', { class: 'logo-text', text: s.siteName || '慈云影视' }),
     ]),
+    burger,
     nav,
     h('div', { class: 'header-actions' }, [
       h('div', { class: 'search-box' }, [
@@ -143,6 +153,103 @@ function renderHeader() {
 }
 
 let lastY = 0;
+
+/* ------------------------------------------------------------
+ * 📱 移动端抽屉式侧边栏
+ * 背景：桌面端顶栏 nav 在 ≤640px 被 display:none 隐藏，手机用户
+ *      没有任何导航入口，无法切换页面。这里提供汉堡菜单 + 左侧抽屉。
+ * 交互：点遮罩 / 点导航项 / 按 Esc 关闭；打开时锁滚动。
+ * ------------------------------------------------------------ */
+let _drawerEl = null;
+
+function openDrawer(navMap) {
+  closeDrawer();   // 幂等：重复点击不叠加
+
+  const cats = (state.categories || []).filter((c) => c && c.name);
+
+  const panel = h('aside', { class: 'drawer-panel', role: 'dialog', 'aria-label': '导航菜单' }, [
+    h('div', { class: 'drawer-head' }, [
+      h('div', { class: 'drawer-brand' }, [
+        h('div', { class: 'logo-mark', text: '慈' }),
+        h('div', { class: 'logo-text', text: (state.site && state.site.siteName) || '慈云影视' }),
+      ]),
+      h('button', {
+        class: 'drawer-close',
+        'aria-label': '关闭菜单',
+        html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+        onclick: closeDrawer,
+      }),
+    ]),
+  ]);
+
+  // 主导航
+  const navBox = h('div', { class: 'drawer-group' }, [
+    h('div', { class: 'drawer-group-title', text: '导航' }),
+  ]);
+  navMap.forEach((n) => {
+    navBox.appendChild(h('a', {
+      class: 'drawer-link',
+      href: n.href,
+      text: n.text,
+      onclick: () => setTimeout(() => { closeDrawer(); markActive(); }, 0),
+    }));
+  });
+  panel.appendChild(navBox);
+
+  // 快捷搜索（移动端顶栏搜索框收起后才好点）
+  const sInput = h('input', {
+    class: 'drawer-search-input',
+    placeholder: '搜索影视、节目…',
+    onkeydown: (e) => {
+      if (e.key === 'Enter') {
+        const v = e.target.value.trim();
+        if (v) { closeDrawer(); go('/search?q=' + encodeURIComponent(v)); }
+      }
+    },
+  });
+  panel.appendChild(h('div', { class: 'drawer-group' }, [
+    h('div', { class: 'drawer-group-title', text: '搜索' }),
+    h('div', { class: 'drawer-search' }, [sInput]),
+  ]));
+
+  // 分类直达
+  if (cats.length) {
+    const catBox = h('div', { class: 'drawer-group' }, [
+      h('div', { class: 'drawer-group-title', text: '分类' }),
+      h('div', { class: 'drawer-chips' },
+        cats.slice(0, 12).map((c) => h('a', {
+          class: 'drawer-chip',
+          href: '#/category/' + c.id,
+          text: (c.icon ? c.icon + ' ' : '') + c.name,
+          onclick: () => setTimeout(closeDrawer, 0),
+        }))
+      ),
+    ]);
+    panel.appendChild(catBox);
+  }
+
+  const overlay = h('div', { class: 'drawer-overlay', onclick: closeDrawer });
+  _drawerEl = h('div', { class: 'drawer' }, [overlay, panel]);
+  document.body.appendChild(_drawerEl);
+  // 触发过渡动画
+  requestAnimationFrame(() => _drawerEl && _drawerEl.classList.add('open'));
+  document.body.classList.add('drawer-locked');
+  document.addEventListener('keydown', _drawerEsc);
+}
+
+function closeDrawer() {
+  if (!_drawerEl) return;
+  const el = _drawerEl;
+  _drawerEl = null;
+  el.classList.remove('open');
+  document.body.classList.remove('drawer-locked');
+  document.removeEventListener('keydown', _drawerEsc);
+  setTimeout(() => el.remove(), 240);   // 等过渡结束再移除
+}
+
+function _drawerEsc(e) {
+  if (e.key === 'Escape') closeDrawer();
+}
 
 function themeIcon() {
   const dark = document.documentElement.getAttribute('data-theme') !== 'light';
@@ -370,34 +477,51 @@ const VOD_META = {
 
 /** 首页影视板块：异步拉取采集源最新更新，按板块流式渲染 */
 async function loadVodSections(zone) {
-  let sections = [];
-  try {
-    const d = await api('/api/home/vod?limit=12');
-    sections = (d && d.sections) || [];
-  } catch { /* 采集源不可用 → 首页仍显示央视栏目，不影响可用性 */ }
+  // ⚡ 性能优化：原来一次性等 /api/home/vod（服务端要跨多个源 × 多个分类串行试探，
+  //    冷启动实测 1.8s+，源变多后更慢）。这里改为「按板块逐个请求、谁先回来谁先渲染」：
+  //    · 4 个板块并行发起，服务端单板块内已做「第一个可用源短路」
+  //    · 任一板块返回即可立刻插入卡片，用户数百毫秒内就能看到内容
+  //    · 全部失败时静默（首页仍有央视栏目，不影响可用性）
+  const KEYS = ['movie', 'tv', 'anime', 'show'];
+  let rendered = 0;
 
-  if (!sections.length || !zone.isConnected) return;
-  zone.innerHTML = '';
-  for (const s of sections) {
-    const meta = VOD_META[s.key] || { icon: '🎞️', href: '/resource' };
-    // 采集源字段为 name/pic，卡片组件用 title/image，这里做一次映射
-    const list = (s.list || []).map((v) => ({
-      title: v.name,
-      image: v.pic,
-      remarks: v.remarks,
-      typeName: v.typeName,
-      source: v.source,
-      id: v.id,
-    }));
-    zone.appendChild(
-      rail(s.label, list, {
-        icon: meta.icon,
-        moreHref: meta.href,
-        moreText: '查看更多',
-        renderItem: (v) => videoCard(v, () => go('/vod/' + v.source + '/' + v.id)),
-      })
-    );
-  }
+  await Promise.all(
+    KEYS.map(async (key) => {
+      let sec = null;
+      try {
+        const d = await api('/api/home/vod?limit=12&section=' + encodeURIComponent(key));
+        sec = ((d && d.sections) || [])[0] || null;
+      } catch { /* 单板块失败不影响其它板块 */ }
+
+      if (!sec || !sec.list || !sec.list.length || !zone.isConnected) return;
+
+      // 首个成功返回时清掉「加载中」占位
+      if (rendered === 0) zone.innerHTML = '';
+      rendered++;
+
+      const meta = VOD_META[sec.key] || { icon: '🎞️', href: '/resource' };
+      // 采集源字段为 name/pic，卡片组件用 title/image，这里做一次映射
+      const list = (sec.list || []).map((v) => ({
+        title: v.name,
+        image: v.pic,
+        remarks: v.remarks,
+        typeName: v.typeName,
+        source: v.source,
+        id: v.id,
+      }));
+      zone.appendChild(
+        rail(sec.label, list, {
+          icon: meta.icon,
+          moreHref: meta.href,
+          moreText: '查看更多',
+          renderItem: (v) => videoCard(v, () => go('/vod/' + v.source + '/' + v.id)),
+        })
+      );
+    })
+  );
+
+  // 全部板块都为空 → 移除占位，避免首页留一块空白
+  if (rendered === 0 && zone.isConnected) zone.remove();
 }
 
 function buildHero(data) {
@@ -1709,7 +1833,9 @@ function page404(root) {
    登录 / 注册
    ============================================================ */
 function pageAuth(root, mode) {
-  if (auth.loggedIn) { go('/profile'); return; }
+  // ⚠️ 已登录访问登录页：用替换跳转而非压栈，否则「返回」会再次落回
+  //    登录页 → 又跳走 → 历史死循环，用户永远回不去之前的页面。
+  if (auth.loggedIn) { goReplace('/profile'); return; }
   const c = (state.site && state.site.community) || {};
   if (mode === 'register' && (c.enabled === false || c.allowRegister === false)) {
     root.appendChild(h('div', { class: 'auth-page' }, [
@@ -1723,7 +1849,8 @@ function pageAuth(root, mode) {
 
   const isReg = mode === 'register';
   const { params } = parseRoute();
-  const redirect = params.get('redirect') || '#/';
+  // ⚠️ redirect 只允许站内路径（防开放重定向），并统一为不带 # 的形式
+  const redirect = safeRedirect(params.get('redirect') || '/', '/');
 
   const fields = {};
 
@@ -1865,8 +1992,8 @@ function pageAuth(root, mode) {
       h('a', { href: '#/forgot', text: '忘记密码？' }),
     ]) : null,
     h('div', { class: 'auth-foot' }, isReg
-      ? ['已有账号？', h('a', { href: '#/login' + (redirect !== '#/' ? '?redirect=' + encodeURIComponent(redirect) : ''), text: '立即登录' })]
-      : ['还没有账号？', h('a', { href: '#/register' + (redirect !== '#/' ? '?redirect=' + encodeURIComponent(redirect) : ''), text: '免费注册' })]),
+      ? ['已有账号？', h('a', { href: '#/login' + (redirect !== '/' ? '?redirect=' + encodeURIComponent(redirect) : ''), text: '立即登录' })]
+      : ['还没有账号？', h('a', { href: '#/register' + (redirect !== '/' ? '?redirect=' + encodeURIComponent(redirect) : ''), text: '免费注册' })]),
   ]);
 
   root.appendChild(h('div', { class: 'auth-page' }, [card]));
@@ -1944,7 +2071,9 @@ function pageAuth(root, mode) {
       auth.user = r.user;
       toast(isReg ? '注册成功，欢迎加入！' : '登录成功，欢迎回来', 'success');
       renderHeader();
-      setTimeout(() => go(redirect.replace(/^#/, '')), 400);
+      // ⚠️ 用替换跳转：登录页这一条历史被目标页覆盖，
+      //    用户按「返回」会直接回到登录前的页面，而不是又落到登录页。
+      setTimeout(() => goReplace(redirect), 400);
     } catch (e) {
       showErr(e.message || '操作失败', e.data && e.data.field);
       submitBtn.disabled = false;
@@ -2028,7 +2157,7 @@ function pageForgot(root) {
       });
       okBox.style.display = 'block';
       okBox.textContent = '✅ ' + (r.message || '密码已重置') + '，即将跳转登录…';
-      setTimeout(() => go('/login'), 1500);
+      setTimeout(() => goReplace('/login'), 1500);
     } catch (e) {
       showErr(e.message || '重置失败');
       submitBtn.disabled = false; submitBtn.textContent = '重置密码';
@@ -2058,7 +2187,8 @@ function scorePassword(p) {
    个人中心
    ============================================================ */
 async function pageProfile(root, tab) {
-  if (!auth.loggedIn) { go('/login?redirect=' + encodeURIComponent(location.hash)); return; }
+  // ⚠️ 守卫跳转用替换式：不往历史压入登录页，登录后返回键干净地回到上一页
+  if (!auth.loggedIn) { goReplace('/login?redirect=' + encodeURIComponent(location.hash || '#/profile')); return; }
   await auth.refresh();
   const u = auth.user;
 

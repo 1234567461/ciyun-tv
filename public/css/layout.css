@@ -46,6 +46,86 @@
 
 .header-actions { display: flex; align-items: center; gap: 9px; }
 
+/* ------------------------------------------------------------
+   📱 移动端抽屉式侧边栏
+   桌面端隐藏汉堡按钮；≤640px 时顶栏 nav 隐藏，改由抽屉承载导航。
+   ------------------------------------------------------------ */
+.nav-burger { display: none; }
+
+.drawer { position: fixed; inset: 0; z-index: 200; }
+.drawer-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0; transition: opacity .24s var(--ease);
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+}
+.drawer.open .drawer-overlay { opacity: 1; }
+
+.drawer-panel {
+  position: absolute; top: 0; left: 0; bottom: 0;
+  width: min(82vw, 320px);
+  background: var(--bg-elev, #16161d);
+  border-right: 1px solid var(--border);
+  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.45);
+  transform: translateX(-102%);
+  transition: transform .24s var(--ease);
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 0 0 28px;
+  display: flex; flex-direction: column;
+}
+.drawer.open .drawer-panel { transform: translateX(0); }
+
+.drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+  position: sticky; top: 0; background: var(--bg-elev, #16161d); z-index: 1;
+}
+.drawer-brand { display: flex; align-items: center; gap: 10px; }
+.drawer-brand .logo-text { font-size: 16px; }
+.drawer-close {
+  width: 32px; height: 32px; border-radius: 8px;
+  display: grid; place-items: center;
+  background: rgba(255, 255, 255, 0.06); color: var(--text-dim);
+  border: 1px solid var(--border); cursor: pointer;
+}
+.drawer-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.12); }
+
+.drawer-group { padding: 8px 12px; }
+.drawer-group-title {
+  font-size: 11.5px; font-weight: 700; letter-spacing: .06em;
+  color: var(--text-mute); text-transform: uppercase;
+  padding: 6px 6px 8px;
+}
+.drawer-link {
+  display: block; padding: 11px 12px; border-radius: 10px;
+  font-size: 15px; font-weight: 500; color: var(--text-dim);
+  transition: background .18s, color .18s;
+}
+.drawer-link:active, .drawer-link:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+.drawer-link.active { color: var(--text); background: rgba(229, 9, 20, 0.18); }
+
+.drawer-search { padding: 0 2px; }
+.drawer-search-input {
+  width: 100%; box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 11px 13px; color: var(--text); font-size: 15px; outline: none;
+}
+.drawer-search-input:focus { border-color: var(--primary); background: rgba(255, 255, 255, 0.12); }
+
+.drawer-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 2px; }
+.drawer-chip {
+  padding: 8px 12px; border-radius: 999px;
+  font-size: 13.5px; color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+}
+.drawer-chip:active { color: var(--text); background: rgba(229, 9, 20, 0.18); border-color: transparent; }
+
+/* 抽屉打开时锁背景滚动 */
+body.drawer-locked { overflow: hidden; }
+
 .search-box {
   display: flex; align-items: center; gap: 8px;
   background: rgba(255, 255, 255, 0.08);

@@ -2,7 +2,7 @@
    慈云影视 · 社交（加好友 / 私信）
    ============================================================ */
 
-import { h, api, go, toast, esc } from './util.js';
+import { h, api, go, goReplace, toast, esc } from './util.js';
 import { auth, avatarEl } from './auth.js';
 
 /** 相对时间 */
@@ -48,7 +48,7 @@ function miniAvatar(user, online) {
    ============================================================ */
 export async function renderSocialPage(root, tab) {
   if (!auth.loggedIn) {
-    go('/login?redirect=' + encodeURIComponent('#/social'));
+    goReplace('/login?redirect=' + encodeURIComponent('#/social'));
     return;
   }
   await auth.refresh();

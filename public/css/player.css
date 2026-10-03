@@ -175,6 +175,8 @@
   .search-box:focus-within { position: absolute; left: 14px; right: 14px; width: auto; top: 10px; height: 40px; z-index: 10; }
   .search-box:focus-within input { display: block; }
   .nav { display: none; }
+  /* 📱 顶栏 nav 隐藏后，用汉堡菜单打开抽屉式侧边栏承接全部导航 */
+  .nav-burger { display: flex; }
   .hero { height: 62vh; min-height: 420px; }
   .hero-content { padding: 0 16px 40px; gap: 12px; }
   .hero-title { font-size: 26px; }

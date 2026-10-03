@@ -7,7 +7,7 @@
      · 上传页（#/shorts/upload）
    ============================================================ */
 
-import { h, api, go, toast, esc, fmtNum } from './util.js';
+import { h, api, go, goReplace, toast, esc, fmtNum } from './util.js';
 import { auth, avatarEl } from './auth.js';
 
 /* ---------- 工具 ---------- */
@@ -221,7 +221,7 @@ function buildFeedCard(item, i) {
   ]);
   likeBtn.onclick = async (e) => {
     e.stopPropagation();
-    if (!auth.loggedIn) { toast('请先登录'); go('/login?redirect=' + encodeURIComponent('#/shorts')); return; }
+    if (!auth.loggedIn) { toast('请先登录'); goReplace('/login?redirect=' + encodeURIComponent('#/shorts')); return; }
     try {
       const r = await api('/api/shorts/' + item.id + '/like', { method: 'POST' });
       likeBtn.classList.toggle('on', r.liked);
@@ -464,7 +464,7 @@ export async function renderShortDetail(root, id) {
     h('span', { text: fmtNum(item.likes || 0) }),
   ]);
   likeBtn.onclick = async () => {
-    if (!auth.loggedIn) { toast('请先登录'); go('/login'); return; }
+    if (!auth.loggedIn) { toast('请先登录'); goReplace('/login'); return; }
     try {
       const r = await api('/api/shorts/' + id + '/like', { method: 'POST' });
       likeBtn.classList.toggle('on', r.liked);
@@ -527,7 +527,7 @@ export async function renderShortDetail(root, id) {
 export async function renderUploadPage(root) {
   await auth.refresh();
   if (!auth.loggedIn) {
-    go('/login?redirect=' + encodeURIComponent('#/shorts/upload'));
+    goReplace('/login?redirect=' + encodeURIComponent('#/shorts/upload'));
     return;
   }
 

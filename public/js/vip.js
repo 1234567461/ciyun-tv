@@ -7,7 +7,7 @@
      · required 模式：部分增值功能需会员
    ============================================================ */
 
-import { h, api, toast, go, relTime } from './util.js';
+import { h, api, toast, go, goReplace, relTime } from './util.js';
 import { auth, avatarEl } from './auth.js';
 
 const ORDER_STATUS = {
@@ -445,7 +445,7 @@ export function renderVipPage(root, site, opts = {}) {
   }
 
   function openPay(plan) {
-    if (!auth.loggedIn) { go('/login?redirect=' + encodeURIComponent('#/vip')); return; }
+    if (!auth.loggedIn) { goReplace('/login?redirect=' + encodeURIComponent('#/vip')); return; }
 
     const info = state.info;
     const cur = info.currency || '¥';

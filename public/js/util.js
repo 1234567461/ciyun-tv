@@ -100,6 +100,32 @@ export function go(path) {
   location.hash = path;
 }
 
+/**
+ * 替换式跳转：不向浏览器历史压栈，而是替换当前条目。
+ * 用途：登录页、守卫重定向等「自动跳转」。
+ * 背景：如果用 go()（压栈），登录成功后按「返回」会再次落回登录页，
+ *      登录页发现已登录又自动跳走 → 历史死循环，用户永远回不去
+ *      登录前的页面（「登录之后没法返回」的根因）。
+ *      用 replace 后，返回键会直接跳过登录页。
+ */
+export function goReplace(path) {
+  const target = '#' + String(path || '/').replace(/^#/, '');
+  if (location.hash === target) return;
+  location.replace(target);
+}
+
+/**
+ * 只允许站内路径的跳转地址（防开放重定向 / javascript: 注入）。
+ * 用于处理 ?redirect= 参数：外链、协议头一律回落到 fallback。
+ */
+export function safeRedirect(raw, fallback = '/') {
+  const s = String(raw || '').trim();
+  if (!s) return fallback;
+  if (/^(https?:)?\/\//i.test(s)) return fallback;   // 绝对地址 / 协议相对
+  if (/^(javascript|data|vbscript):/i.test(s)) return fallback;
+  return s.startsWith('#') ? s.slice(1) : s;
+}
+
 /** 本地存储 */
 export const ls = {
   get(k, d) {

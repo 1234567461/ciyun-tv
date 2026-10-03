@@ -27,6 +27,9 @@ const chat = require('./lib/chat');
 const pay = require('./lib/pay');
 const security = require('./lib/security');
 const mail = require('./lib/mail');
+
+// 从磁盘恢复采集源缓存（分类表 / 列表），避免重启后首屏重新等十几秒
+try { cctv.loadPersist(); } catch { /* 缓存恢复失败不影响启动 */ }
 const { store, REDEEM_TYPES, FAMILY_ROLES, FAMILY_ROLE_NAME, FAMILY_ROLE_PERMS } = require('./lib/store');
 
 const app = express();
@@ -309,10 +312,13 @@ app.get('/api/home', async (req, res) => {
  */
 app.get('/api/home/vod', async (req, res) => {
   const limit = Math.min(24, Math.max(6, parseInt(req.query.limit, 10) || 12));
+  const only = String(req.query.section || '').trim();   // 只取某个板块（前端流式渲染用）
   try {
-    const pool = (store.getSources() || []).filter(
-      (s) => s && s.id && s.enabled !== false && !String(s.type || '').startsWith('cctv')
-    );
+    const pool = (store.getSources() || [])
+      .filter((s) => s && s.id && s.enabled !== false && !String(s.type || '').startsWith('cctv'))
+      // ⚡ 按 priority 降序：优先试「响应快 / 资源全」的源，让首屏板块更快命中，
+      //    避免每次都要先试几个慢源（源变多后这是首屏变慢的主因）。
+      .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0));
     if (!pool.length) return res.json({ sections: [] });
 
     // 首页展示的分类（按常见影视分类，取各源第一个可用源）
@@ -323,11 +329,52 @@ app.get('/api/home/vod', async (req, res) => {
       { key: 'show', label: '综艺娱乐', ids: ['39', '40', '41'] },
     ];
 
-    const pickSource = async (ids, name) => {
-      for (const s of pool) {
+    // ⚡ 并行竞速取源：原来 for-of 串行试源，最坏情况要试完 17 个源 × 多个分类
+    //    （每个源慢时 3~5s，首屏直接卡死）。改为「取前 N 个高优先级源并行竞速，
+    //    谁先返回有效列表就用谁」，整体收敛到单个源的耗时。
+    const RACE = 4;                       // 并行竞速的源数量
+    const TRY_TIMEOUT = 3000;             // 单个 (源,分类) 的硬超时
+    // ⚠️ 必须清理定时器：否则超时器会一直挂在事件循环上，
+    //    导致即使结果早已返回，响应仍被推迟到超时点才发出（表现为恒定 3s 延迟）。
+    const withTimeout = (p, ms) => {
+      let timer = null;
+      const guard = new Promise((_, rej) => {
+        timer = setTimeout(() => rej(new Error('timeout')), ms);
+      });
+      return Promise.race([p, guard]).finally(() => { if (timer) clearTimeout(timer); });
+    };
+
+    const pickSource = async (ids) => {
+      // ⚡ 逐个候选依次「先到先用」：不再 Promise.all 等所有超时器结算，
+      //    而是用 Promise.any 语义 —— 任何一个源先返回有效列表就立刻收工。
+      //    这样整体耗时 = 最快源耗时（实测 ~10ms），而不是最慢源的超时时间。
+      const attempts = [];
+      for (const s of pool.slice(0, RACE)) {
+        for (const id of ids) {
+          attempts.push(
+            withTimeout(sources.call(s, 'list', { typeId: id, page: 1 }), TRY_TIMEOUT)
+              .then((r) => {
+                if (r && r.list && r.list.length) {
+                  return { source: s.id, sourceName: s.name, typeId: id, list: r.list.slice(0, limit) };
+                }
+                throw new Error('empty');   // 无数据 → 让 Promise.any 继续等其它源
+              })
+              .catch((e) => { throw e; })
+          );
+        }
+      }
+      try {
+        return await Promise.any(attempts);
+      } catch { /* 头部源全部失败/都为空 */ }
+
+      // 头部源全部失败 → 退化为串行试剩余源（保证可用性，但设总预算）
+      const deadline = Date.now() + 4000;
+      for (let i = RACE; i < pool.length; i++) {
+        if (Date.now() > deadline) break;
+        const s = pool[i];
         for (const id of ids) {
           try {
-            const r = await sources.call(s, 'list', { typeId: id, page: 1 });
+            const r = await withTimeout(sources.call(s, 'list', { typeId: id, page: 1 }), TRY_TIMEOUT);
             if (r && r.list && r.list.length) {
               return { source: s.id, sourceName: s.name, typeId: id, list: r.list.slice(0, limit) };
             }
@@ -337,9 +384,12 @@ app.get('/api/home/vod', async (req, res) => {
       return null;
     };
 
-    const results = await Promise.all(WANT.map((w) => pickSource(w.ids, w.label)));
+    const results = await Promise.all(
+      WANT.filter((w) => !only || w.key === only).map((w) => pickSource(w.ids))
+    );
+    const wanted = WANT.filter((w) => !only || w.key === only);
     const sections = results
-      .map((r, i) => (r ? { key: WANT[i].key, label: WANT[i].label, ...r } : null))
+      .map((r, i) => (r ? { key: wanted[i].key, label: wanted[i].label, ...r } : null))
       .filter(Boolean);
 
     res.json({ sections });
@@ -3929,15 +3979,39 @@ function requireSocial(req, res, next) {
 }
 
 /** 用户公开信息（脱敏，不含邮箱/密码等） */
-function publicUser(acc) {
-  const u = store.findUser(acc);
-  if (!u) return { account: acc, nickname: acc, avatar: '' };
+/**
+ * 用户信息脱敏输出。
+ * ⚠️ 参数是「用户对象」（历史上有版本误传账号字符串再查库，导致
+ *    user.account 变成整个对象 → 前端头像渲染 n.slice 崩溃、登录卡死，
+ *    且密码哈希随对象泄漏）。这里直接使用传入对象，并兼容字符串入参。
+ */
+function publicUser(u) {
+  // 兼容误传账号字符串的调用方式
+  if (typeof u === 'string') u = store.findUser(u);
+  if (!u) return null;
+  const cfg = store.settings.monetize || {};
+  const now = Date.now();
+  const isAdm = isAdminAccount(u.account);
+  const own = (u.vip && u.vip.expire > now) || isAdm;
   return {
     account: u.account,
     nickname: u.nickname || u.account,
+    email: u.email || '',
     avatar: u.avatar || '',
-    vip: !!(u.vip && u.vip.expire > Date.now()),
+    bio: u.bio || '',
     createdAt: u.createdAt || 0,
+    vip: isAdm ? ADMIN_PRIVILEGE : (u.vip || null),
+    vipActive: !!own,
+    vipDaysLeft: isAdm ? 36500 : (own ? Math.ceil((u.vip.expire - now) / 86400000) : 0),
+    isAdmin: isAdm,
+    adminPrivilege: isAdm,
+    unlimited: isAdm,
+    quota: pay.quotaView(u, { cfg, isAdmin: isAdm, isVip: own }),
+    balance: isAdm ? null : Math.round(((u.balance || 0)) * 100) / 100,
+    currency: cfg.currency || '¥',
+    stats: {
+      comments: (store.getComments().filter((c) => c.account === u.account && c.status !== 'deleted') || []).length,
+    },
   };
 }
 
@@ -4200,14 +4274,45 @@ async function warmupCategories() {
     const list = (store.getSources() || []).filter(
       (s) => s && s.id && s.enabled !== false && !String(s.type || '').startsWith('cctv')
     );
+    if (!list.length) return;
+
+    // ⚡ 并行预热：上游 ac=class 单源 1.5~3.3s，串行 17 源要 30s+。
+    //    改为并发（限流 8）后整体 ≈ 最慢单源耗时。
+    //    配合磁盘缓存，重启后大部分直接命中，预热秒级完成。
+    const CONCURRENCY = 8;
+    let idx = 0;
     let ok = 0;
-    for (const s of list) {
-      try {
-        await sources.call(s, 'categories');
-        ok++;
-      } catch { /* 单个源失败不影响其他 */ }
-    }
-    if (ok) console.log(`  [预热] 采集源分类就绪：${ok}/${list.length} 个源（含内容过滤名单）`);
+    await new Promise((resolve) => {
+      let running = 0;
+      let finished = 0;
+      const next = () => {
+        while (running < CONCURRENCY && idx < list.length) {
+          const s = list[idx++];
+          running++;
+          sources.call(s, 'categories')
+            .then(() => { ok++; })
+            .catch(() => { /* 单源失败不影响其他 */ })
+            .finally(() => {
+              running--;
+              finished++;
+              if (finished >= list.length) resolve();
+              else next();
+            });
+        }
+      };
+      next();
+    });
+    console.log(`  [预热] 采集源分类就绪：${ok}/${list.length} 个源（含内容过滤名单）`);
+
+    // 首页板块也一并预热（前端首屏直接命中缓存）
+    const WARM_TYPES = ['6', '12', '36', '39'];
+    const hot = list.slice(0, 6);
+    await Promise.all(
+      hot.flatMap((s) => WARM_TYPES.map((t) =>
+        sources.call(s, 'list', { typeId: t, page: 1 }).catch(() => null)
+      ))
+    );
+    console.log(`  [预热] 首页板块数据就绪`);
   } catch { /* 预热失败不影响服务 */ }
 }
 

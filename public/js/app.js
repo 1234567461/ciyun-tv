@@ -1570,35 +1570,77 @@ async function pageSearch(root, q) {
     .catch(() => {})
     .finally(finishOne);
 
-  // ② 影视资源库（多源聚合，较慢，~4s，但不再阻塞央视结果展示）
-  withTimeout(api('/api/multi/search?wd=' + encodeURIComponent(q)), 12000, { results: [] })
-    .then((d) => {
-      const results = ((d && d.results) || []).filter((r) => (r.list || []).length);
-      const total = results.reduce((a, r) => a + r.list.length, 0);
-      if (total) {
-        shown += total;
-        multiZone.appendChild(h('div', { class: 'section-head', style: { marginTop: '30px' } }, [
-          h('div', { class: 'section-title' }, [
-            h('span', { class: 'icon', text: '🗂️' }),
-            h('span', { text: '影视资源库 · ' + total + ' 条' }),
-          ]),
-        ]));
-        results.forEach((r) => {
-          multiZone.appendChild(h('div', { class: 'section-head', style: { marginTop: '18px' } }, [
-            h('div', { class: 'section-title' }, [
-              h('span', { class: 'icon', text: '📡' }),
-              h('span', { text: r.source.name }),
-            ]),
-            h('span', { class: 'page-sub', text: r.list.length + ' 条' }),
-          ]));
-          const grid = h('div', { class: 'grid' });
-          r.list.slice(0, 24).forEach((v) => grid.appendChild(vodCard(v, r.source.id)));
-          multiZone.appendChild(grid);
+  // ② 影视资源库（多源聚合）：走流式 NDJSON，哪个源先返回就先渲染哪个源的分组，
+  //    不再等全部源回齐（16 个源全量等待实测约 4~8s，流式下首个源 0.3s 即可出内容）。
+  (() => {
+    let head = null;          // 「影视资源库 · N 条」这个总标题节点
+    let total = 0;            // 累计条数
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, 15000);
+
+    const ensureHead = () => {
+      if (head) return head;
+      head = h('div', { class: 'section-head', style: { marginTop: '30px' } }, [
+        h('div', { class: 'section-title' }, [
+          h('span', { class: 'icon', text: '🗂️' }),
+          h('span', { text: '影视资源库 · 0 条' }),
+        ]),
+      ]);
+      multiZone.appendChild(head);
+      return head;
+    };
+
+    const renderBatch = (source, list) => {
+      if (!list || !list.length) return;
+      ensureHead().querySelectorAll('span')[1].textContent =
+        '影视资源库 · ' + (total += list.length) + ' 条';
+      shown += list.length;
+
+      multiZone.appendChild(h('div', { class: 'section-head', style: { marginTop: '18px' } }, [
+        h('div', { class: 'section-title' }, [
+          h('span', { class: 'icon', text: '📡' }),
+          h('span', { text: (source && source.name) || '资源' }),
+        ]),
+        h('span', { class: 'page-sub', text: list.length + ' 条' }),
+      ]));
+      const grid = h('div', { class: 'grid' });
+      list.slice(0, 24).forEach((v) => grid.appendChild(vodCard(v, (source && source.id) || '')));
+      multiZone.appendChild(grid);
+    };
+
+    fetch('/api/multi/search?stream=1&wd=' + encodeURIComponent(q), { signal: ctrl.signal })
+      .then((res) => {
+        if (!res.ok || !res.body || !res.body.getReader) {
+          // 浏览器/代理不支持流式 → 回退到一次性接口
+          return api('/api/multi/search?wd=' + encodeURIComponent(q)).then((d) => {
+            ((d && d.results) || []).forEach((r) => renderBatch(r.source, r.list));
+          });
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        const pump = () => reader.read().then(({ done, value }) => {
+          if (done) return;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop();
+          for (const line of lines) {
+            const s = line.trim();
+            if (!s) continue;
+            let msg = null;
+            try { msg = JSON.parse(s); } catch { continue; }
+            if (msg && msg.type === 'batch') renderBatch(msg.source, msg.list);
+          }
+          return pump();
         });
-      }
-    })
-    .catch(() => {})
-    .finally(finishOne);
+        return pump();
+      })
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timer);
+        finishOne();
+      });
+  })();
 
   function doSearch(kw) {
     if (!kw) return;

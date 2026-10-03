@@ -706,7 +706,37 @@ app.get('/api/multi/search', async (req, res) => {
   // 排除央视源：前端搜索已单独走 /api/search 取央视结果，此处重复查纯属浪费
   // （央视源检索耗时最长，之前正是它把整体拖到 4s）
   const list = store.getSources().filter((s) => s.enabled !== false && s.type !== 'cctv');
-  const results = await sources.searchAll(list, wd, { page: parseInt(req.query.page, 10) || 1 });
+  const page = parseInt(req.query.page, 10) || 1;
+  const kw = String(req.query.kw || '').trim();
+
+  // stream=1 → NDJSON 流式返回：每个源一返回就推一行，前端边收边渲染。
+  // 源数量增长后（16+ 个源），再等全部返回会让用户干等；流式可让首屏 1s 内可见。
+  if (req.query.stream === '1') {
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');   // 关掉反代缓冲，保证实时推送
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+    let closed = false;
+    req.on('close', () => { closed = true; });
+
+    const write = (obj) => {
+      if (closed) return;
+      try { res.write(JSON.stringify(obj) + '\n'); } catch { closed = true; }
+    };
+
+    await sources.searchAllStream(list, kw || wd, {
+      page,
+      timeout: 4500,
+      deadline: 8000,
+      onResult: (r) => write({ type: 'batch', source: r.source, list: r.list }),
+    });
+    write({ type: 'done', keyword: wd });
+    if (!closed) res.end();
+    return;
+  }
+
+  const results = await sources.searchAll(list, wd, { page });
   res.json({ keyword: wd, results: results.filter((r) => r.source) });
 });
 

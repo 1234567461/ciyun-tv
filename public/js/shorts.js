@@ -594,6 +594,11 @@ export async function renderUploadPage(root) {
     ]));
     dropZone.classList.add('has-file');
     dropZone.querySelector('.sh-drop-t').textContent = f.name;
+    // 确保发布按钮可用（防御上次上传失败后的禁用态）；上传进行中则不动
+    if (submitBtn.textContent !== '上传中…') {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '发布';
+    }
   };
 
   dropZone.onclick = () => fileInput.click();
@@ -610,7 +615,8 @@ export async function renderUploadPage(root) {
   const descIn = h('textarea', { class: 'sh-input', rows: '3', placeholder: '补充说明（选填，最多 500 字）', maxlength: '500' });
   const tagsIn = h('input', { class: 'sh-input', placeholder: '标签，用空格或逗号分隔（选填，最多 8 个）' });
 
-  const submitBtn = h('button', { class: 'btn btn-primary', text: '发布', disabled: '' });
+  // 发布按钮始终可点：未选文件/未填标题时点击给出 toast 提示（与 doSubmit 校验一致）
+  const submitBtn = h('button', { class: 'btn btn-primary', text: '发布' });
 
   const doSubmit = () => {
     if (!picked) { toast('请先选择视频文件'); return; }

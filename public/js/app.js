@@ -2,7 +2,7 @@
    慈云影视 · 主应用（路由 + 页面）
    ============================================================ */
 
-import { h, api, go, goReplace, safeRedirect, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor } from './util.js';
+import { h, api, go, goReplace, goBackOrHome, navStackPush, safeRedirect, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor } from './util.js';
 import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn, syncAnnouncement, renderAnnounceBar } from './components.js';
 import { Player, detectType } from './player.js';
 import { auth, avatarEl } from './auth.js';
@@ -196,6 +196,41 @@ function openDrawer(navMap) {
   });
   panel.appendChild(navBox);
 
+  // 用户区：移动端顶栏空间小，个人中心/退出登录等入口收进抽屉
+  const userBox = h('div', { class: 'drawer-group drawer-user' });
+  userBox.appendChild(h('div', { class: 'drawer-group-title', text: '账号' }));
+  if (auth.loggedIn && auth.user) {
+    const u = auth.user;
+    const ua = h('div', { class: 'drawer-user-card' }, [
+      avatarEl(u),
+      h('div', { class: 'drawer-user-info' }, [
+        h('div', { class: 'n', text: u.nickname || u.account }),
+        h('div', { class: 'a', text: '@' + u.account }),
+      ]),
+    ]);
+    ua.onclick = () => { closeDrawer(); go('/profile'); };
+    userBox.appendChild(ua);
+    userBox.appendChild(h('a', { class: 'drawer-link', href: '#/profile', text: '👤 个人中心', onclick: () => setTimeout(closeDrawer, 0) }));
+    userBox.appendChild(h('button', {
+      class: 'drawer-link drawer-logout',
+      html: '🚪 退出登录',
+      onclick: async () => {
+        closeDrawer();
+        await auth.logout();
+        toast('已退出登录');
+        renderHeader();
+        route();
+      },
+    }));
+  } else {
+    userBox.appendChild(h('div', { class: 'drawer-login-cta' }, [
+      h('a', { class: 'btn btn-ghost btn-sm', href: '#/login', text: '登录', onclick: () => setTimeout(closeDrawer, 0) }),
+      h('a', { class: 'btn btn-primary btn-sm', href: '#/register', text: '注册', onclick: () => setTimeout(closeDrawer, 0) }),
+    ]));
+    userBox.appendChild(h('a', { class: 'drawer-link', href: '#/vip', text: '💎 会员中心', onclick: () => setTimeout(closeDrawer, 0) }));
+  }
+  panel.appendChild(userBox);
+
   // 快捷搜索（移动端顶栏搜索框收起后才好点）
   const sInput = h('input', {
     class: 'drawer-search-input',
@@ -377,6 +412,7 @@ async function route() {
   const root = app();
   window.scrollTo(0, 0);
   markActive();
+  navStackPush();
   // 清理上一页的聊天室 SSE 连接
   if (window.__chat && window.__chat.destroy) { try { window.__chat.destroy(); } catch {} window.__chat = null; }
   if (window.__dm && window.__dm.destroy) { try { window.__dm.destroy(); } catch {} window.__dm = null; }
@@ -1826,6 +1862,10 @@ function pageHistory(root) {
 function page404(root) {
   root.appendChild(h('div', { class: 'main', style: { paddingTop: '140px' } }, [
     emptyState('🧭', '页面不存在', '检查一下地址吧'),
+    h('div', { style: { display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '18px' } }, [
+      h('button', { class: 'btn btn-ghost', text: '← 返回上一页', onclick: () => goBackOrHome('/') }),
+      h('a', { class: 'btn btn-primary', href: '#/', text: '回首页' }),
+    ]),
   ]));
 }
 
@@ -1996,7 +2036,16 @@ function pageAuth(root, mode) {
       : ['还没有账号？', h('a', { href: '#/register' + (redirect !== '/' ? '?redirect=' + encodeURIComponent(redirect) : ''), text: '免费注册' })]),
   ]);
 
-  root.appendChild(h('div', { class: 'auth-page' }, [card]));
+  // ← 返回：登录/找回密码页此前是"死胡同"，手机用户只能干瞪眼。
+  //   有可靠来路就回上一页，否则回首页。
+  const backBtn = h('button', {
+    class: 'auth-back',
+    'aria-label': '返回',
+    html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>返回</span>',
+    onclick: () => goBackOrHome('/'),
+  });
+
+  root.appendChild(h('div', { class: 'auth-page' }, [backBtn, card]));
 
   /** 重绘登录方式切换 */
   const paintMode = () => {
@@ -2143,7 +2192,16 @@ function pageForgot(root) {
     submitBtn,
     h('div', { class: 'auth-foot' }, ['想起来了？', h('a', { href: '#/login', text: '返回登录' })]),
   ]);
-  root.appendChild(h('div', { class: 'auth-page' }, [card]));
+  // ← 返回：登录/找回密码页此前是"死胡同"，手机用户只能干瞪眼。
+  //   有可靠来路就回上一页，否则回首页。
+  const backBtn = h('button', {
+    class: 'auth-back',
+    'aria-label': '返回',
+    html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>返回</span>',
+    onclick: () => goBackOrHome('/'),
+  });
+
+  root.appendChild(h('div', { class: 'auth-page' }, [backBtn, card]));
 
   const showErr = (m) => { errBox.style.display = 'block'; errBox.textContent = '⚠ ' + m; okBox.style.display = 'none'; };
 

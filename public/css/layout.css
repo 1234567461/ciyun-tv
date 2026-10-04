@@ -123,6 +123,22 @@
 }
 .drawer-chip:active { color: var(--text); background: rgba(229, 9, 20, 0.18); border-color: transparent; }
 
+/* 抽屉用户区（移动端账号入口：此前只能挤在小顶栏里） */
+.drawer-user { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 12px; }
+.drawer-user-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border);
+  margin-bottom: 8px; cursor: pointer;
+}
+.drawer-user-card:active { background: rgba(255, 255, 255, 0.1); }
+.drawer-user-card .n { font-size: 15px; font-weight: 600; color: var(--text); }
+.drawer-user-card .a { font-size: 12.5px; color: var(--text-mute); margin-top: 2px; }
+.drawer-logout { width: 100%; text-align: left; background: none; border: none; cursor: pointer; color: #ff6b6b; font-family: inherit; }
+.drawer-logout:hover { background: rgba(229, 9, 20, 0.14); color: #ff5252; }
+.drawer-login-cta { display: flex; gap: 10px; padding: 4px 2px 10px; }
+.drawer-login-cta .btn { flex: 1; }
+
 /* 抽屉打开时锁背景滚动 */
 body.drawer-locked { overflow: hidden; }
 

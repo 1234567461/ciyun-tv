@@ -3883,7 +3883,24 @@ app.get('/api/shorts', (req, res) => {
   let list = store.getShorts({ account, keyword }).filter(
     (s) => (s.status || 'pending') === 'published' || (me && me.account === s.account) || canAdmin
   );
-  if (sort === 'hot') list = list.slice().sort((a, b) => (b.views || 0) - (a.views || 0));
+  /**
+   * 推流量机制（推荐排序）：
+   *   score = (点赞×3 + 评论×2 + 播放×0.2) / (小时龄+2)^1.4
+   *   —— 互动越高分越高；时间衰减让新内容有机会被推上前头（Hacker News 风格）。
+   *   完全无互动的新内容保底 0.5 分，保证至少有曝光。
+   */
+  if (sort === 'recommend') {
+    const now = Date.now();
+    const score = (s) => {
+      const likes = (s.likes || []).length;
+      const comments = store.getComments().filter((c) => c.targetId === 'short:' + s.id && c.status !== 'deleted').length;
+      const hours = Math.max(0, (now - (s.createdAt || now)) / 3600000);
+      const base = likes * 3 + comments * 2 + (s.views || 0) * 0.2;
+      return (base + 0.5) / Math.pow(hours + 2, 1.4);
+    };
+    list = list.slice().sort((a, b) => score(b) - score(a));
+  }
+  else if (sort === 'hot') list = list.slice().sort((a, b) => (b.views || 0) - (a.views || 0));
   else if (sort === 'like') list = list.slice().sort((a, b) => (b.likes || []).length - (a.likes || []).length);
   else list = list.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 

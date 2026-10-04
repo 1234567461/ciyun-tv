@@ -7,7 +7,7 @@
      · 上传页（#/shorts/upload）
    ============================================================ */
 
-import { h, api, go, goReplace, toast, esc, fmtNum } from './util.js';
+import { h, api, go, goReplace, goBackOrHome, toast, esc, fmtNum } from './util.js';
 import { auth, avatarEl } from './auth.js';
 
 /* ---------- 工具 ---------- */
@@ -54,20 +54,47 @@ export async function renderShortsPage(root, params) {
   await auth.refresh();
 
   if (view === 'grid') return renderGrid(root);
-  return renderFeed(root);
+  return renderFeed(root, params);
 }
 
 /* ============================================================
-   竖屏刷视频流
+   竖屏刷视频流（推流量机制：推荐 / 最新 / 最热）
    ============================================================ */
-async function renderFeed(root) {
+const FEED_SORTS = [
+  { id: 'recommend', label: '推荐' },
+  { id: 'new', label: '最新' },
+  { id: 'hot', label: '最热' },
+];
+
+async function renderFeed(root, params) {
+  let sort = 'recommend';
+  try { sort = params.get('sort') || 'recommend'; } catch {}
+  if (!FEED_SORTS.some((s) => s.id === sort)) sort = 'recommend';
+
   const wrap = h('div', { class: 'sh-feed-wrap' });
   root.appendChild(wrap);
 
-  // 顶部悬浮操作条
+  // 顶部悬浮操作条：返回 / 排序切换（推流量机制入口） / 网格 / 发布
+  const sortTabs = h('div', { class: 'sh-sort-tabs' },
+    FEED_SORTS.map((s) => h('button', {
+      class: 'sh-sort-tab' + (s.id === sort ? ' on' : ''),
+      text: s.label,
+      onclick: () => {
+        if (s.id === sort) return;
+        go('/shorts?view=feed&sort=' + s.id);   // hash 变化 → 路由重渲染 feed
+      },
+    }))
+  );
+
   const head = h('div', { class: 'sh-feed-head' }, [
-    h('button', { class: 'sh-fh-btn', text: '☰', title: '网格浏览', onclick: () => go('/shorts?view=grid') }),
+    h('button', {
+      class: 'sh-fh-btn', title: '返回',
+      html: '‹',
+      onclick: () => goBackOrHome('/'),
+    }),
     h('div', { class: 'sh-fh-title', text: '刷视频' }),
+    sortTabs,
+    h('button', { class: 'sh-fh-btn', text: '☰', title: '网格浏览', onclick: () => go('/shorts?view=grid') }),
     auth.loggedIn
       ? h('button', { class: 'sh-fh-btn sh-fh-pub', html: '<span>＋</span> 发布', onclick: () => go('/shorts/upload') })
       : h('button', { class: 'sh-fh-btn', html: '<span>＋</span> 发布', onclick: () => go('/login?redirect=' + encodeURIComponent('#/shorts/upload')) }),
@@ -85,7 +112,7 @@ async function renderFeed(root) {
 
   let list = [];
   try {
-    const d = await api('/api/shorts?sort=new&page=1&size=20');
+    const d = await api('/api/shorts?sort=' + encodeURIComponent(sort) + '&page=1&size=20');
     list = (d && d.list) || [];
   } catch (e) {
     stage.innerHTML = '';
@@ -476,7 +503,7 @@ export async function renderShortDetail(root, id) {
   const isMine = auth.user && auth.user.account === item.account;
   box.appendChild(h('div', { class: 'sh-detail' }, [
     h('div', { class: 'sh-detail-head' }, [
-      h('button', { class: 'sh-back', html: '‹ 返回', onclick: () => go('/shorts?view=grid') }),
+      h('button', { class: 'sh-back', html: '‹ 返回', onclick: () => goBackOrHome('/shorts?view=grid') }),
     ]),
     h('div', { class: 'sh-detail-body' }, [
       video,

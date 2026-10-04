@@ -44,6 +44,21 @@
   min-height: 100vh; display: grid; place-items: center; padding: 110px 20px 60px;
   position: relative;
 }
+/* ← 返回按钮：登录/找回密码页的逃生口（此前是死胡同） */
+.auth-back {
+  position: absolute; top: 86px; left: 22px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-glass, rgba(255,255,255,.06)); backdrop-filter: blur(12px);
+  border: 1px solid var(--border); border-radius: 999px;
+  color: var(--text-dim); font-size: 14px; font-weight: 500;
+  padding: 9px 18px 9px 14px; cursor: pointer;
+  transition: all .18s var(--ease);
+  min-height: 40px;   /* 触控区域 */
+}
+.auth-back:hover { color: var(--text); border-color: var(--primary); transform: translateX(-2px); }
+@media (max-width: 640px) {
+  .auth-back { top: 74px; left: 14px; }
+}
 .auth-page::before {
   content: ''; position: absolute; inset: 0; z-index: 0;
   background:

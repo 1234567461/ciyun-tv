@@ -115,6 +115,38 @@ export function goReplace(path) {
 }
 
 /**
+ * 会话内导航栈：记录本站 hash 路由轨迹（最多 25 条）。
+ * 在 route() 中调用；给「← 返回」按钮提供可靠的回退目标 ——
+ * 直接 history.back() 可能跳出站外（比如从搜索引擎直达登录页），
+ * 这里只回站内页。
+ */
+export function navStackPush() {
+  try {
+    const stack = JSON.parse(sessionStorage.getItem('cy_navstack') || '[]');
+    const cur = location.hash || '#/';
+    if (stack[stack.length - 1] !== cur) {
+      stack.push(cur);
+      sessionStorage.setItem('cy_navstack', JSON.stringify(stack.slice(-25)));
+    }
+  } catch { /* 存储不可用不影响路由 */ }
+}
+
+/** 智能返回：优先回站内上一页；没有可靠来路则回 fallback（默认首页）。替换式跳转。 */
+export function goBackOrHome(fallback = '/') {
+  let stack = [];
+  try { stack = JSON.parse(sessionStorage.getItem('cy_navstack') || '[]'); } catch {}
+  const cur = location.hash || '#/';
+  while (stack.length && stack[stack.length - 1] === cur) stack.pop();
+  const prev = stack[stack.length - 1];
+  // 上一页不能又是登录/注册页（否则来回横跳）
+  if (prev && prev !== cur && !/\/(login|register|forgot)\b/.test(prev)) {
+    goReplace(prev);
+  } else {
+    goReplace(fallback);
+  }
+}
+
+/**
  * 只允许站内路径的跳转地址（防开放重定向 / javascript: 注入）。
  * 用于处理 ?redirect= 参数：外链、协议头一律回落到 fallback。
  */

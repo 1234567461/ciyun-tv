@@ -551,22 +551,45 @@
   overscroll-behavior: contain;
 }
 .sh-feed-head {
-  position: absolute; top: 0; left: 0; right: 0; z-index: 5;
-  display: flex; align-items: center; gap: 10px;
-  padding: 14px 16px;
-  background: linear-gradient(180deg, rgba(0,0,0,.62), transparent);
+  /* ⚠️ 顶栏是 fixed z-index:100，feed 全屏层 z-index:60 —— 操作条必须让出顶栏高度，
+     否则排序/发布按钮被顶栏挡住点不到（此前登录按钮恰好压在排序 tab 上）。 */
+  position: absolute; top: var(--header-h, 68px); left: 0; right: 0; z-index: 5;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px 14px;
+  background: linear-gradient(180deg, rgba(0,0,0,.5), transparent);
   pointer-events: none;
 }
 .sh-feed-head > * { pointer-events: auto; }
-.sh-fh-title { flex: 1; text-align: center; font-size: 15px; font-weight: 600; color: #fff; }
+.sh-fh-title { font-size: 15px; font-weight: 600; color: #fff; white-space: nowrap; }
 .sh-fh-btn {
   background: rgba(255,255,255,.14); border: none; color: #fff;
   border-radius: 20px; padding: 7px 14px; font-size: 13px; cursor: pointer;
   backdrop-filter: blur(8px); transition: .18s; display: inline-flex; align-items: center; gap: 4px;
+  min-width: 36px; min-height: 32px; justify-content: center;   /* 触控区域 */
+  white-space: nowrap;   /* 防"发布"在小屏被折行成两行 */
 }
 .sh-fh-btn:hover { background: rgba(255,255,255,.24); }
 .sh-fh-pub { background: var(--brand, #e50914); }
 .sh-fh-pub:hover { background: #c40812; }
+
+/* —— 推流量机制：排序切换（推荐/最新/最热） —— */
+.sh-sort-tabs {
+  display: flex; align-items: center; gap: 2px;
+  background: rgba(255,255,255,.12); border-radius: 20px;
+  padding: 3px; backdrop-filter: blur(8px);
+  margin-left: auto;
+}
+.sh-sort-tab {
+  border: none; background: transparent; color: rgba(255,255,255,.72);
+  border-radius: 17px; padding: 5px 13px; font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: .18s; white-space: nowrap;
+}
+.sh-sort-tab:hover { color: #fff; }
+.sh-sort-tab.on { background: #fff; color: #111; font-weight: 600; }
+@media (max-width: 380px) {
+  .sh-fh-title { display: none; }   /* 小屏让位给排序切换与操作按钮 */
+  .sh-fh-btn { padding: 7px 10px; }
+}
 
 .sh-stage { flex: 1; position: relative; overflow: hidden; }
 .sh-card {

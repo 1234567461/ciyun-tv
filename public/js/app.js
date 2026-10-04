@@ -2,8 +2,8 @@
    慈云影视 · 主应用（路由 + 页面）
    ============================================================ */
 
-import { h, api, go, goReplace, goBackOrHome, navStackPush, safeRedirect, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor } from './util.js';
-import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn, syncAnnouncement, renderAnnounceBar } from './components.js';
+import { h, api, go, goReplace, goBackOrHome, navStackPush, safeRedirect, parseRoute, esc, fmtNum, fav, history, toast, applyTheme, ls, durToSec, relTime, titleColor, shareLink } from './util.js';
+import { videoCard, columnCard, rail, sklRail, footer, emptyState, loadMoreBtn, syncAnnouncement, renderAnnounceBar, posterFallback } from './components.js';
 import { Player, detectType } from './player.js';
 import { auth, avatarEl } from './auth.js';
 import { mountComments } from './comments.js';
@@ -124,6 +124,22 @@ function renderHeader() {
     onclick: () => openDrawer(navMap),
   });
 
+  // 📱 手机端 search-box 点击直达搜索页：
+  //    ≤640px 时 CSS 把 input 隐藏（.search-box input{display:none}），
+  //    点击图标无法让 input 聚焦 → :focus-within 永不触发 → 搜索完全点不开。
+  //    跳搜索页（大输入框 + 热词）是手机端最顺手的路径。
+  const searchBox = h('div', {
+    class: 'search-box',
+    onclick: (e) => {
+      if (e.target.closest('input')) return; // 桌面端点输入框区域：正常输入
+      if (window.innerWidth <= 640) { e.preventDefault(); go('/search'); }
+      else searchInput.focus();
+    },
+  }, [
+    h('span', { html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>' }),
+    searchInput,
+  ]);
+
   header.append(
     h('a', { class: 'logo', href: '#/' }, [
       h('div', { class: 'logo-mark', text: '慈' }),
@@ -132,10 +148,7 @@ function renderHeader() {
     burger,
     nav,
     h('div', { class: 'header-actions' }, [
-      h('div', { class: 'search-box' }, [
-        h('span', { html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>' }),
-        searchInput,
-      ]),
+      searchBox,
       h('button', { class: 'icon-btn', title: '切换主题', html: themeIcon(), onclick: toggleTheme }),
       buildUserArea(),
     ])
@@ -945,6 +958,11 @@ async function pageWatch(root, guid) {
           toast(on ? '已加入收藏' : '已取消收藏', 'success');
         },
       }),
+      h('button', {
+        class: 'btn btn-ghost btn-sm',
+        html: '↗ 分享',
+        onclick: () => shareLink({ title: info.title || '央视视频' }),
+      }),
       h('a', { class: 'btn btn-primary btn-sm', href: '#/', text: '回到首页' }),
     ]),
   ]);
@@ -1413,11 +1431,12 @@ function vodCard(v, srcId) {
   const thumb = h('div', { class: 'card-thumb' });
   if (v.pic) {
     const img = h('img', { alt: v.name, loading: 'lazy' });
-    img.onerror = () => { img.remove(); thumb.style.background = titleColor(v.name || 'x'); };
+    img.onerror = () => { img.remove(); thumb.style.background = titleColor(v.name || 'x'); thumb.appendChild(posterFallback(v.name, v.typeName)); };
     img.src = v.pic;
     thumb.appendChild(img);
   } else {
     thumb.style.background = titleColor(v.name || 'x');
+    thumb.appendChild(posterFallback(v.name, v.typeName));   // 上游列表无图 → 海报式占位
   }
   return h('div', {
     class: 'card',
@@ -1460,7 +1479,13 @@ async function pageVod(root, srcId, vodId) {
   wrap.appendChild(playerHost);
 
   if (!lines.length) {
-    playerHost.appendChild(h('div', { class: 'error-box', text: '该影片暂无可播放线路' }));
+    playerHost.appendChild(h('div', { class: 'error-box' }, [
+      h('div', { text: '该影片暂无可播放线路（源片源失效）' }),
+      h('div', { style: { marginTop: '10px' } }, [
+        h('button', { class: 'btn btn-primary btn-sm', text: '🔍 搜索其他源', onclick: () => go('/search?q=' + encodeURIComponent(detail.name || '')) }),
+        h('a', { class: 'btn btn-ghost btn-sm', href: '#/resource', text: '逛逛资源库', style: { marginLeft: '8px' } }),
+      ]),
+    ]));
     return;
   }
 
@@ -1513,6 +1538,11 @@ async function pageVod(root, srcId, vodId) {
           e.target.innerHTML = on ? '★ 已收藏' : '☆ 收藏';
           toast(on ? '已加入收藏' : '已取消收藏', 'success');
         },
+      }),
+      h('button', {
+        class: 'btn btn-ghost btn-sm',
+        html: '↗ 分享',
+        onclick: () => shareLink({ title: detail.name || '影视资源' }),
       }),
       h('a', { class: 'btn btn-primary btn-sm', href: '#/resource', text: '更多资源' }),
     ]),
@@ -1695,6 +1725,8 @@ async function pageSearch(root, q) {
 
   if (!q) {
     box.appendChild(emptyState('🔍', '搜索你想看的内容', '同时搜索央视网与影视资源库（动漫 / 美剧 / 电影 / 电视剧）'));
+    // 从手机端顶栏搜索图标跳转而来：直接聚焦弹键盘，少一次点击
+    setTimeout(() => { try { input.focus({ preventScroll: true }); } catch { input.focus(); } }, 150);
     return;
   }
 

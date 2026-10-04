@@ -4,6 +4,20 @@
 
 import { h, esc, lazyImg, titleColor, durToSec } from './util.js';
 
+/**
+ * 海报式占位（源列表无封面时）：
+ * 片名首字大字 + 按标题生成的渐变底 + 类型角标，代替单调色块。
+ * 不少采集源「列表接口不给图、详情接口才给」，此类条目统一用此占位。
+ */
+export function posterFallback(name, typeName) {
+  const t = String(name || '剧').trim();
+  const chars = t.slice(0, Math.min(4, Math.max(2, Math.ceil(t.length / 2))));
+  return h('div', { class: 'poster-fallback' }, [
+    h('div', { class: 'pf-name', text: chars }),
+    typeName ? h('div', { class: 'pf-type', text: String(typeName).slice(0, 4) }) : null,
+  ]);
+}
+
 /** 视频卡片 */
 export function videoCard(v, onClick) {
   const thumb = h('div', { class: 'card-thumb' });

@@ -7,7 +7,7 @@
      · 上传页（#/shorts/upload）
    ============================================================ */
 
-import { h, api, go, goReplace, goBackOrHome, toast, esc, fmtNum } from './util.js';
+import { h, api, go, goReplace, goBackOrHome, toast, esc, fmtNum, shareLink } from './util.js';
 import { auth, avatarEl } from './auth.js';
 
 /* ---------- 工具 ---------- */
@@ -522,6 +522,9 @@ export async function renderShortDetail(root, id) {
           : null,
         h('div', { class: 'sh-detail-acts' }, [
           likeBtn,
+          h('button', { class: 'sh-dact', onclick: () => shareLink({ title: item.title || '短视频', text: '发现一条有趣视频：' + (item.title || '') }) }, [
+            h('span', { text: '↗' }), h('span', { text: '分享' }),
+          ]),
           h('button', { class: 'sh-dact', onclick: () => go('/shorts?view=grid') }, [
             h('span', { text: '🎬' }), h('span', { text: '去广场' }),
           ]),

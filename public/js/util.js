@@ -286,9 +286,153 @@ export function debounce(fn, ms = 300) {
   };
 }
 
+/** 复制文本到剪贴板（clipboard API → execCommand 降级） */
+export async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { /* 降级 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:-999px;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
+
+/** 关闭分享面板（全局单例） */
+export function closeShareSheet() {
+  const old = document.getElementById('cy-share-sheet');
+  if (old) old.remove();
+  document.body.classList.remove('cy-sheet-locked');
+}
+
+/**
+ * 分享面板（底部弹层，移动端惯例）：
+ *  ① 复制链接 —— 任何环境可用
+ *  ② 系统分享 —— 支持 Web Share API 的手机浏览器（可直接发微信/QQ）
+ *  ③ 发给好友 —— 站内私信（好友列表选择，POST /api/social/messages）
+ * 消息文本格式约定：'🎬 视频分享｜标题\n链接'，私信端识别后渲染成卡片。
+ */
+export function shareLink(opts = {}) {
+  const url = location.origin + location.pathname + (location.hash || '#/');
+  const title = (opts.title || document.title || '慈云影视').slice(0, 60);
+  closeShareSheet();
+
+  const root = h('div', { id: 'cy-share-sheet' });
+  const mask = h('div', { class: 'cy-sheet-mask', onclick: () => closeShareSheet() });
+  const sheet = h('div', { class: 'cy-sheet' }, [
+    h('div', { class: 'cy-sheet-bar' }),
+    h('div', { class: 'cy-sheet-title', text: '分享「' + (title.length > 18 ? title.slice(0, 18) + '…' : title) + '」' }),
+    h('div', { class: 'cy-sheet-body' }),
+  ]);
+  root.append(mask, sheet);
+  document.body.appendChild(root);
+  document.body.classList.add('cy-sheet-locked');
+  const body = sheet.querySelector('.cy-sheet-body');
+  const close = () => closeShareSheet();
+
+  /* —— ① 复制链接 —— */
+  body.appendChild(h('button', {
+    class: 'cy-sheet-item',
+    onclick: async () => {
+      const ok = await copyText(url);
+      toast(ok ? '链接已复制，去粘贴给朋友吧' : '复制失败，请手动复制地址栏链接', ok ? 'success' : 'error');
+      if (ok) close();
+    },
+  }, [
+    h('span', { class: 'ic', text: '🔗' }),
+    h('span', { class: 'lb', text: '复制链接' }),
+    h('span', { class: 'ds', text: '粘贴到微信 / QQ 等发给朋友' }),
+  ]));
+
+  /* —— ② 系统分享（手机）—— */
+  if (navigator.share) {
+    body.appendChild(h('button', {
+      class: 'cy-sheet-item',
+      onclick: () => {
+        navigator.share({ title, text: (opts.text || ('我在「慈云影视」发现《' + title + '》，一起来看！')), url })
+          .then(() => close())
+          .catch((e) => { if (e && e.name !== 'AbortError') toast('分享失败，试试复制链接'); });
+      },
+    }, [
+      h('span', { class: 'ic', text: '📤' }),
+      h('span', { class: 'lb', text: '系统分享' }),
+      h('span', { class: 'ds', text: '调用手机分享面板（微信 / QQ / 微博）' }),
+    ]));
+  }
+
+  /* —— ③ 发给好友（站内私信）—— */
+  body.appendChild(h('button', {
+    class: 'cy-sheet-item',
+    onclick: () => showFriends(),
+  }, [
+    h('span', { class: 'ic', text: '💬' }),
+    h('span', { class: 'lb', text: '发给好友' }),
+    h('span', { class: 'ds', text: '通过站内私信分享给好友' }),
+  ]));
+
+  /* 好友选择视图（面板内切换） */
+  async function showFriends() {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'cy-sheet-hint', text: '加载好友列表…' }));
+    let authMod;
+    try {
+      authMod = await import('./auth.js');
+    } catch { /* ignore */ }
+    if (!authMod || !authMod.auth || !authMod.auth.loggedIn) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class: 'cy-sheet-hint' }, [
+        h('div', { text: '登录后才能发给好友' }),
+        h('button', { class: 'btn btn-primary btn-sm', text: '去登录', onclick: () => { close(); goReplace('/login?redirect=' + encodeURIComponent(location.hash)); } }),
+      ]));
+      return;
+    }
+    let list = [];
+    try {
+      const d = await api('/api/social/friends');
+      list = d.list || [];
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class: 'cy-sheet-hint', text: '加载失败：' + e.message }));
+      return;
+    }
+    body.innerHTML = '';
+    if (!list.length) {
+      body.appendChild(h('div', { class: 'cy-sheet-hint' }, [
+        h('div', { text: '还没有好友，先去添加一个吧' }),
+        h('button', { class: 'btn btn-primary btn-sm', text: '去加好友', onclick: () => { close(); go('/social?tab=search'); } }),
+      ]));
+      return;
+    }
+    list.forEach((f) => {
+      body.appendChild(h('button', {
+        class: 'cy-sheet-friend',
+        onclick: async () => {
+          const msg = '🎬 视频分享｜' + title + '\n' + url;
+          try {
+            await api('/api/social/messages', { method: 'POST', body: { to: f.account, text: msg } });
+            close();
+            toast('已分享给 ' + (f.nickname || f.account), 'success');
+          } catch (e) {
+            toast(e.message || '发送失败', 'error');
+          }
+        },
+      }, [
+        h('span', { class: 'av', text: (f.nickname || f.account || '?').slice(0, 1).toUpperCase() }),
+        h('span', { class: 'lb', text: f.nickname || f.account }),
+        f.online ? h('span', { class: 'dot' }) : null,
+      ]));
+    });
+  }
+}
+
 /** toast 提示 */
-export function toast(msg, type = 'info') {
-  let box = document.getElementById('cy-toast');
+export function toast(msg, type = 'info') {  let box = document.getElementById('cy-toast');
   if (!box) {
     box = document.createElement('div');
     box.id = 'cy-toast';

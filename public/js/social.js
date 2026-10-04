@@ -41,6 +41,47 @@ function miniAvatar(user, online) {
   return el;
 }
 
+/**
+ * 消息气泡渲染：
+ *  - 「🎬 视频分享｜标题\n链接」→ 分享卡片（点击直达）
+ *  - 普通文本里的链接（http… 或 #/…）→ 自动可点
+ */
+function bubbleEl(text) {
+  const raw = String(text || '');
+
+  // ① 分享卡片格式（shareLink 面板「发给好友」产出的约定格式）
+  const sm = raw.match(/^🎬\s*视频分享｜([^\n]+)\n(\S+)\s*$/);
+  if (sm) {
+    const target = normalizeHash(sm[2]);
+    return h('div', { class: 'bubble' }, [
+      h('div', { class: 'soc-share-card' }, [
+        h('div', { class: 't', text: '🎬 ' + sm[1] }),
+        h('span', { class: 'go', text: '去看看 ›', onclick: () => go(target) }),
+      ]),
+    ]);
+  }
+
+  // ② 普通消息：拆分 URL 让其可点
+  const parts = raw.split(/(https?:\/\/[^\s]+|(?<=\s|^)#\/[^\s]+)/g);
+  if (parts.length === 1) return h('div', { class: 'bubble', text: raw });
+  return h('div', { class: 'bubble' }, parts.map((p) => {
+    if (!p) return null;
+    if (/^https?:\/\//.test(p) || /(^|\s)#\//.test(' ' + p)) {
+      const hash = normalizeHash(p);
+      const label = p.length > 46 ? p.slice(0, 46) + '…' : p;
+      return h('a', { href: hash, text: label, onclick: (e) => { e.preventDefault(); go(hash); } });
+    }
+    return document.createTextNode(p);
+  }).filter(Boolean));
+}
+
+/** 任意 URL → 站内 hash 路由（'https://host/#/x' 或 '#/x' → '/x'） */
+function normalizeHash(u) {
+  const s = String(u || '');
+  const mi = s.match(/#(\/[^\s]*)/);
+  return mi ? mi[1] : '/';
+}
+
 /* ============================================================
    社交主页面：#/social
    ------------------------------------------------------------
@@ -207,7 +248,7 @@ async function loadChat(chatBox, acc, onBack) {
     const mine = m.from === me;
     body.appendChild(
       h('div', { class: 'soc-msg' + (mine ? ' mine' : '') }, [
-        h('div', { class: 'bubble', text: m.text }),
+        bubbleEl(m.text),
         h('div', { class: 'mt', text: clockTime(m.at) }),
       ])
     );
@@ -226,7 +267,7 @@ async function loadChat(chatBox, acc, onBack) {
       const mine = r.message;
       body.appendChild(
         h('div', { class: 'soc-msg mine' }, [
-          h('div', { class: 'bubble', text: mine.text }),
+          bubbleEl(mine.text),
           h('div', { class: 'mt', text: clockTime(mine.at) }),
         ])
       );

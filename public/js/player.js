@@ -106,6 +106,11 @@ export class Player {
     this.mediaStreak = 0;
     this._netTimer = null;
     this.retryLine = null;
+    // 🔴 直播稳定性：媒体错误恢复节流 / 引擎重建计数 / 用户暂停意图
+    this._lastRec = 0;
+    this._hardRestart = 0;
+    this._userPaused = false;
+    this._destroyed = false;
     this._build();
     this._bindKeys();
     if (this.lines.length) this.play(0, { autoplay: opts.autoplay });
@@ -241,7 +246,20 @@ export class Player {
       if (btn) btn.innerHTML = ICON.playSm;
     });
     v.addEventListener('waiting', () => this.loading.classList.add('show'));
-    v.addEventListener('playing', () => { this.loading.classList.remove('show'); this.failCount = 0; });
+    v.addEventListener('playing', () => { this.loading.classList.remove('show'); this.failCount = 0; this._userPaused = false; this._nudged = false; this._hardRestart = 0; });
+    // 🔴 直播上古 bug 兜底：hls.js 的 recoverMediaError / 引擎重建会触发 video.load()
+    //    （emptied），把 autoplay 的 play() 打断。非用户主动暂停时自动续播一次，
+    //    否则直播表现为「画面停在第一帧 / 黑屏，永远暂停」。
+    v.addEventListener('emptied', () => {
+      if (this._destroyed) return;
+      if (this.opts.autoplay === false || this._userPaused) return;
+      const now = Date.now();
+      if (now - (this._lastKick || 0) < 500) return;   // 节流：引擎重建风暴时不叠加 kick
+      this._lastKick = now;
+      const kick = () => { const p = v.play(); if (p && p.catch) p.catch(() => {}); };
+      if (v.readyState >= 2) kick();
+      else v.addEventListener('canplay', kick, { once: true });
+    });
     v.addEventListener('canplay', () => this.loading.classList.remove('show'));
     v.addEventListener('timeupdate', () => this._updateProgress());
     v.addEventListener('progress', () => {
@@ -379,7 +397,11 @@ export class Player {
             // 吞吐量自适应，保证流畅
             abrEwmaDefaultEstimate: 1000000,
             // 直播：从最新分片起播，减少首帧等待
-            liveDurationInfinity: false,
+            // 🔴 liveDurationInfinity：直播把 duration 设为 Infinity，
+            //    避免滑动窗口 duration 更新与 appendBuffer 竞争 ——
+            //    央视流会周期性触发 mediaSourceRequiresReset（appendBuffer 失败），
+            //    表现为画面永远暂停/黑屏，即长期遗留的「直播打不开」bug。
+            liveDurationInfinity: true,
             // 直播：允许回退重试已过期分片
             appendErrorMaxRetry: 5,
           });
@@ -403,10 +425,45 @@ export class Player {
                 if (n > 6) this._handleError('网络错误，尝试切换线路');
                 break;
               }
-              case Hls.ErrorTypes.MEDIA_ERROR:
+              case Hls.ErrorTypes.MEDIA_ERROR: {
+                // ⚠️ 上古 bug 修复（直播「黑屏永远暂停」）：
+                //    央视流周期性抛 mediaSourceRequiresReset（appendBuffer 失败），
+                //    recoverMediaError 内部 detach/attach 会触发 video.load()，
+                //    无限循环打断 autoplay → 画面永远暂停。
+                //    策略：① 节流 —— 1.2s 内不重复 recover；
+                //          ② 升级 —— 连续无效改整引擎重建（liveDurationInfinity
+                //             已消除大部分触发源，此处兜底）；
+                //          ③ 直播不判死 —— 指数退避无限重建（2s→4s→…cap 15s），
+                //             点播仍按原阈值判死。
+                this.mediaStreak++;
+                const now = Date.now();
+                const isLive = !!this._hlsLive;
+                // 先试「跳帧」：解码坏包（PIPELINE_ERROR_DECODE）时把进度往前拨 1s
+                // 往往比重建整个引擎更快恢复，且不打断播放
+                if (this.video.currentTime > 0 && !this._nudged) {
+                  this._nudged = true;
+                  try { this.video.currentTime += 1; } catch {}
+                  try { this.hls.recoverMediaError(); } catch {}
+                  break;
+                }
+                if (this._lastRec && now - this._lastRec < 1200) {
+                  if (isLive) {
+                    // 直播：重建引擎，退避间隔翻倍
+                    this._hardRestart++;
+                    const delay = Math.min(2000 * Math.pow(2, this._hardRestart - 1), 15000);
+                    clearTimeout(this._netTimer);
+                    this._netTimer = setTimeout(() => this.play(this.current, { autoplay: !this._userPaused }), delay);
+                    break;
+                  }
+                  if (++this._hardRestart > 2) { this._handleError('媒体错误'); break; }
+                  this._lastRec = now;
+                  this.play(this.current, { autoplay: !this._userPaused });
+                  break;
+                }
+                this._lastRec = now;
                 try { this.hls.recoverMediaError(); } catch {}
-                if (++this.mediaStreak > 4) this._handleError('媒体错误');
                 break;
+              }
               default:
                 this._handleError('播放失败');
             }
@@ -418,6 +475,7 @@ export class Player {
           this.hls.on(Hls.Events.FRAG_BUFFERED, resetStreak);
           // 动态缓冲调节：卡顿时加大缓冲
           this.hls.on(Hls.Events.LEVEL_LOADED, (evt, d) => {
+            this._hlsLive = !!(d.details && d.details.live);   // 供 MEDIA_ERROR 分支区分直播/点播
             if (d.details && d.details.live) this.hls.config.liveSyncDurationCount = 3;
           });
           this.video._hls = this.hls;
@@ -504,7 +562,9 @@ export class Player {
 
   /* ---------------- 控件动作 ---------------- */
   toggle() {
-    if (this.video.paused) this.video.play(); else this.video.pause();
+    // 记录是否用户主动暂停：hls 内部 load() 重置后据此决定是否自动续播
+    if (this.video.paused) { this._userPaused = false; this.video.play().catch(() => {}); }
+    else { this._userPaused = true; this.video.pause(); }
   }
   seek(t) {
     if (!isFinite(this.video.duration)) return;
@@ -554,6 +614,7 @@ export class Player {
     clearTimeout(this._tipTimer);
     clearTimeout(this._netTimer);
     document.removeEventListener('keydown', this._keyHandler);
+    this._destroyed = true;   // 阻止 emptied 兜底逻辑在销毁后继续拉起播放
     this._destroyEngine();
     this.el.innerHTML = '';
   }

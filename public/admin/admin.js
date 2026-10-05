@@ -1355,7 +1355,12 @@ async function viewSettings(c) {
       <div class="card">
         <h3>🔐 安全</h3>
         <div class="field"><label>管理员账号</label><input id="s-admin" value="${esc(s.adminUsername || 'admin')}"></div>
-        <div class="field"><label>管理员密码</label><input id="s-pass" type="text" value="${esc(s.adminPassword || 'admin888')}"></div>
+        <div class="field"><label>管理员密码</label>
+          <input id="s-pass" type="password" value="" placeholder="留空表示不修改（至少 8 位，含字母和数字）" autocomplete="new-password">
+          <div style="font-size:12.5px;color:var(--muted);margin-top:4px">
+            ${s.adminPasswordSet ? '✅ 已设置管理员密码' : '⚠️ 尚未设置，生产环境请立即设置'} · 修改后需重新登录
+          </div>
+        </div>
         <div style="font-size:12.5px;color:var(--warn)">⚠️ 开源部署时请务必修改默认密码</div>
       </div>
       <div class="card">
@@ -1390,8 +1395,13 @@ async function viewSettings(c) {
           <option value="starttls" ${(s.mail && s.mail.secure === 'starttls') ? 'selected' : ''}>STARTTLS（587）</option>
         </select></div>
       </div>
-      <div class="switch-row" style="margin-top:6px"><div><div class="t">注册需邮箱验证</div><div class="d">开启后新用户注册必须完成邮箱验证码校验</div></div>
+      <div class="switch-row" style="margin-top:6px"><div><div class="t">注册需填写邮箱</div>
+        <div class="d">开启后注册时邮箱为必填项（不校验验证码）</div></div>
         <div class="switch ${s.community.needEmail ? 'on' : ''}" id="s-needmail"></div></div>
+      <div class="switch-row"><div><div class="t">注册需邮箱验证码</div>
+        <div class="d">开启后必须点「获取验证码」并填写正确才可注册。<b style="color:var(--warn)">需先配置上方 SMTP，否则用户无法完成注册</b></div></div>
+        <div class="switch ${s.community.verifyEmail ? 'on' : ''}" id="s-verifyemail"></div></div>
+      <div class="md-note" style="margin-top:10px">💡 未配置 SMTP 时，请关闭「注册需邮箱验证码」，并在「社区与评论」中保持「开放注册」开启，用户即可<b>无需邮箱</b>直接注册。</div>
     </div>`;
 
   const sw = (id, key) => {
@@ -1399,6 +1409,7 @@ async function viewSettings(c) {
     el.onclick = () => { el.classList.toggle('on'); };
   };
   sw('#p-autoq'); sw('#p-failover'); sw('#p-preload');
+  sw('#s-needmail'); sw('#s-verifyemail');
   bindCommunityCard();
 
   // 监控服务连通性测试（走服务端代理，避免浏览器跨域限制）
@@ -1425,7 +1436,7 @@ async function viewSettings(c) {
   const bar = mountSaveBar({
     title: '站点设置',
     saveText: '保存设置',
-        watch: '#s-name, #s-slogan, #s-notice, #s-mode, #s-primary, #s-accent, #s-admin, #s-pass, #s-statusurl, #s-smtp-host, #s-smtp-port, #s-smtp-user, #s-smtp-pass, #s-smtp-from, #s-smtp-secure',
+        watch: '#s-name, #s-slogan, #s-notice, #s-mode, #s-primary, #s-accent, #s-admin, #s-pass, #s-statusurl, #s-smtp-host, #s-smtp-port, #s-smtp-user, #s-smtp-pass, #s-smtp-from, #s-smtp-secure, #s-needmail, #s-verifyemail',
     onSave: async () => {
       const patch = {
         siteName: $('#s-name').value,
@@ -1448,15 +1459,18 @@ async function viewSettings(c) {
           from: $('#s-smtp-from').value.trim(),
           secure: $('#s-smtp-secure').value,
         },
-        community: { needEmail: $('#s-needmail').classList.contains('on') },
+        community: { needEmail: $('#s-needmail').classList.contains('on'), verifyEmail: $('#s-verifyemail').classList.contains('on') },
       };
       const r = await API('/api/admin/settings', { method: 'PUT', body: patch });
       app.settings = r;
       await saveCommunityCard();
+      // 口令保存成功后清空输入框（页面展示用），避免继续以明文滞留
+      const pwdEl = $('#s-pass');
+      if (pwdEl) { pwdEl.value = ''; pwdEl.placeholder = '留空表示不修改'; }
       toast('设置已保存', 'ok');
       return true;
     },
-  }).el;
+  });
   $('#settings-savebar').replaceWith(bar.el);
 }
 
@@ -1775,8 +1789,11 @@ async function viewComments(c) {
    用户管理
    ============================================================ */
 async function viewUsers(c) {
-  c.innerHTML = '<div class="page-head"><div><h2>用户管理</h2><div class="sub">注册用户、封禁与密码重置</div></div></div>' +
+  c.innerHTML = '<div class="page-head"><div><h2>用户管理</h2><div class="sub">注册用户、封禁与密码重置</div></div>' +
+    '<div class="ph-actions"><button class="btn btn-primary" id="user-create">\u2795 \u521b\u5efa\u7528\u6237</button></div></div>' +
     '<div class="card" id="user-box"><div class="empty"><div class="i">\u23f3</div>加载中\u2026</div></div>';
+
+  $('#user-create').onclick = () => createUserModal(load);
 
   const load = async () => {
     const d = await API('/api/admin/users');
@@ -1787,7 +1804,7 @@ async function viewUsers(c) {
     $('#user-box').innerHTML = '<div class="table-wrap"><table class="table">' +
       '<thead><tr><th>账号</th><th>昵称</th><th>邮箱</th><th>评论</th><th>注册</th><th>状态</th><th style="width:220px">操作</th></tr></thead>' +
       '<tbody>' + d.users.map((u) =>
-        '<tr><td class="name">' + esc(u.account) + '</td>' +
+        '<tr><td class="name">' + esc(u.account) + (u.isAdmin ? ' <span class="badge ok">管理员</span>' : '') + '</td>' +
         '<td>' + esc(u.nickname || '\u2014') + '</td>' +
         '<td style="font-size:12px;color:var(--text-mute)">' + esc(u.email || '\u2014') + '</td>' +
         '<td>' + u.comments + '</td>' +
@@ -1820,6 +1837,82 @@ async function viewUsers(c) {
     }));
   };
   load();
+}
+
+/**
+ * 后台「创建用户」弹窗
+ * 走 POST /api/admin/users，绕过邮箱验证码流程，适合发号 / 内部测试。
+ */
+function createUserModal(onDone) {
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  const dlg = document.createElement('div');
+  dlg.className = 'modal-dlg';
+  mask.appendChild(dlg);
+
+  dlg.innerHTML =
+    '<div class="md-head"><h3>➕ 创建用户</h3><button class="md-close">✕</button></div>' +
+    '<div class="md-body">' +
+      '<div class="field"><label>账号 <span class="req">*</span></label>' +
+        '<input id="cu-acc" placeholder="3-32 位，字母/数字/下划线/点/横线/@ 开头" autocomplete="off">' +
+        '<div class="d">用于登录的账号名</div></div>' +
+      '<div class="field-row" style="margin-top:12px">' +
+        '<div class="field"><label>密码 <span class="req">*</span></label>' +
+          '<input id="cu-pwd" type="password" placeholder="至少 8 位，含字母和数字" autocomplete="new-password"></div>' +
+        '<div class="field"><label>昵称（选填）</label><input id="cu-nick" placeholder="默认与账号相同"></div>' +
+      '</div>' +
+      '<div class="field" style="margin-top:12px"><label>邮箱（选填）</label>' +
+        '<input id="cu-email" type="email" placeholder="用于登录与找回密码，可留空" autocomplete="off"></div>' +
+      '<div class="md-sec">会员设置（可选）</div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label>会员套餐</label><select id="cu-vip">' +
+          '<option value="">不赠送</option>' +
+          '<option value="day">日卡</option>' +
+          '<option value="month">月卡</option>' +
+          '<option value="quarter">季卡</option>' +
+          '<option value="year">年卡</option>' +
+        '</select></div>' +
+        '<div class="field"><label>赠送天数</label><input id="cu-days" type="number" min="0" value="30"></div>' +
+      '</div>' +
+      '<label class="md-chk" style="margin-top:14px"><input type="checkbox" id="cu-unlimited"> 无限观看（不计会员时长）</label>' +
+      '<div class="md-note">💡 此处创建的用户<b>无需邮箱验证</b>，创建后即可直接用账号密码登录。适合批量发号、内部测试或帮别人代开账号。</div>' +
+    '</div>' +
+    '<div class="md-foot"><span></span><div class="md-btns">' +
+      '<button class="btn btn-ghost" id="cu-cancel">取消</button>' +
+      '<button class="btn btn-primary" id="cu-save">创建</button>' +
+    '</div></div>';
+
+  const close = () => mask.remove();
+  dlg.querySelector('.md-close').onclick = close;
+  dlg.querySelector('#cu-cancel').onclick = close;
+
+  dlg.querySelector('#cu-save').onclick = async () => {
+    const body = {
+      account: dlg.querySelector('#cu-acc').value.trim(),
+      password: dlg.querySelector('#cu-pwd').value,
+      nickname: dlg.querySelector('#cu-nick').value.trim(),
+      email: dlg.querySelector('#cu-email').value.trim(),
+      vip: dlg.querySelector('#cu-vip').value,
+      days: +dlg.querySelector('#cu-days').value || 0,
+      unlimited: dlg.querySelector('#cu-unlimited').checked,
+    };
+    if (!body.account) return toast('请填写账号', 'err');
+    if (!body.password) return toast('请填写密码', 'err');
+    const btn = dlg.querySelector('#cu-save');
+    btn.disabled = true; btn.textContent = '创建中…';
+    try {
+      await API('/api/admin/users', { method: 'POST', body });
+      toast('用户 @' + body.account + ' 已创建', 'ok');
+      close();
+      onDone && onDone();
+    } catch (e) {
+      toast(e.message || '创建失败', 'err');
+      btn.disabled = false; btn.textContent = '创建';
+    }
+  };
+
+  document.body.appendChild(mask);
+  setTimeout(() => { const a = dlg.querySelector('#cu-acc'); if (a) a.focus(); }, 30);
 }
 
 /* ============================================================

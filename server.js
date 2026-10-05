@@ -1190,7 +1190,7 @@ app.get('/api/admin/health', requireAdmin, async (req, res) => {
 app.put('/api/admin/community', requireAdmin, (req, res) => {
   const b = req.body || {};
   const patch = {};
-  for (const k of ['enabled', 'allowRegister', 'allowComment', 'guestComment', 'commentReview', 'needEmail']) {
+  for (const k of ['enabled', 'allowRegister', 'allowComment', 'guestComment', 'commentReview', 'needEmail', 'verifyEmail', 'emailLogin']) {
     if (b[k] !== undefined) patch[k] = !!b[k];
   }
   if (b.interval !== undefined) patch.interval = Math.max(0, Math.min(600, parseInt(b.interval, 10) || 0));

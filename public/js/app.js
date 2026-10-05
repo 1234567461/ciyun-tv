@@ -1107,8 +1107,24 @@ async function pageLive(root) {
     ]);
     grid.appendChild(card);
     api('/api/live/' + c.id + '/epg').then((epg) => {
-      if (epg && epg.isLive) card.querySelector('.c-now').textContent = '正在播出：' + epg.isLive;
-    }).catch(() => { card.querySelector('.c-now').textContent = '查看节目单'; });
+      // 后端 /epg 返回 { channel, name, date, list:[{title,start,end,showTime}] }，
+      // 没有 isLive 字段 —— 需自行从 list 中挑出「当前正在播」的一期。
+      const el = card.querySelector('.c-now');
+      const now = Date.now() / 1000;
+      const list = (epg && epg.list) || [];
+      const cur = list.find((it) => now >= it.start && now < it.end)
+        || list.find((it) => it.end > now)
+        || list[list.length - 1];
+      if (cur && cur.title) {
+        el.textContent = '正在播出：' + cur.title;
+        el.title = cur.title;
+      } else {
+        el.textContent = '查看节目单';
+      }
+    }).catch(() => {
+      const el = card.querySelector('.c-now');
+      if (el) el.textContent = '查看节目单';
+    });
   });
 }
 

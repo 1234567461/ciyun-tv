@@ -9,6 +9,7 @@
 
 import { h, api, go, goReplace, goBackOrHome, toast, esc, fmtNum, shareLink } from './util.js';
 import { auth, avatarEl } from './auth.js';
+import { followBtn } from './app.js';
 
 /* ---------- 工具 ---------- */
 
@@ -525,6 +526,15 @@ export async function renderShortDetail(root, id) {
           h('button', { class: 'sh-dact', onclick: () => shareLink({ title: item.title || '短视频', text: '发现一条有趣视频：' + (item.title || '') }) }, [
             h('span', { text: '↗' }), h('span', { text: '分享' }),
           ]),
+          followBtn({
+            type: 'short',
+            targetId: item.id,
+            title: item.title || '',
+            cover: item.cover || '',
+          }, {
+            // sh-dact 是竖排图标按钮，跟随关注态同步文案
+            onChange: (on) => { const b = document.querySelector('.sh-detail-acts .follow-btn'); if (b) b.querySelector('span:last-child').textContent = on ? '已追' : '追剧'; },
+          }),
           h('button', { class: 'sh-dact', onclick: () => go('/shorts?view=grid') }, [
             h('span', { text: '🎬' }), h('span', { text: '去广场' }),
           ]),

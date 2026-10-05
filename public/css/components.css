@@ -267,6 +267,17 @@
 /* 播放页骨架 */
 .watch-skel { height: 62vh; border-radius: 14px; }
 
+/* 资源库播放页容器（#/vod/:src/:id）——
+   ⚠️ 此前该类没有任何样式定义，导致 .player-head 直接贴在 y=0，
+   被 fixed 顶栏（z-100）压住 → 「收藏/分享/追剧」按钮看得见却点不到。
+   这里补上顶栏避让（与 .player-page 一致的语义）。 */
+.watch-wrap {
+  padding-top: var(--header-h, 68px);
+  padding-bottom: 70px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
 /* ============================================================
    直播 · 实时节目单条
    ============================================================ */
@@ -906,3 +917,23 @@ body.cy-sheet-locked { overflow: hidden; }
   border: 1px solid rgba(255,255,255,.3); border-radius: 4px; padding: 2px 9px;
   white-space: nowrap;
 }
+
+/* —— 追剧（关注）—— */
+.follow-btn.on { color: #ff8f8f; }
+.follow-card { position: relative; }
+.follow-del {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  width: 28px; height: 28px; border-radius: 50%; border: none;
+  background: rgba(0,0,0,.55); color: #fff; font-size: 13px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .18s, background .18s; backdrop-filter: blur(6px);
+}
+.follow-card:hover .follow-del, .follow-del:focus { opacity: 1; }
+.follow-del:hover { background: rgba(229,9,20,.92); }
+@media (max-width: 640px) { .follow-del { opacity: 1; } }   /* 触屏无 hover，常显 */
+/* 短视频详情里的追剧按钮（复用 sh-dact 竖排样式，覆盖 btn 基础样式） */
+.sh-detail-acts .follow-btn {
+  background: none; border: none; color: inherit; padding: 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer;
+}
+.sh-detail-acts .follow-btn:not(.on) { color: rgba(255,255,255,.82); }

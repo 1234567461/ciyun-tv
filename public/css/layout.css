@@ -12,6 +12,16 @@
   transition: transform .4s var(--ease-out), background .35s var(--ease),
     backdrop-filter .35s var(--ease), border-color .35s;
 }
+/* ⚠️ 未滚动时顶栏背景透明，但整条 fixed 区域仍会拦截点击 ——
+   页面顶部若有按钮（播放页的收藏/分享/追剧、feed 操作条），
+   就会出现「按钮看得见但点不到」。
+   修法：透明态下仅 logo / 导航 / 操作区等真实控件接收事件，
+   容器其余空白区域放行指针（点下面的内容正常生效）。 */
+.header:not(.scrolled) { pointer-events: none; }
+.header:not(.scrolled) .logo,
+.header:not(.scrolled) .nav,
+.header:not(.scrolled) .nav-burger,
+.header:not(.scrolled) .header-actions > * { pointer-events: auto; }
 .header.scrolled {
   background: var(--bg-glass);
   backdrop-filter: blur(20px) saturate(180%);

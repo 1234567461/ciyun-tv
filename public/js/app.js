@@ -91,6 +91,7 @@ function renderHeader() {
     { href: '#/category/documentary', text: '纪录片', match: ['/category/documentary'] },
     { href: '#/category/anime', text: '央视动画', match: ['/category/anime'] },
     { href: '#/fav', text: '我的收藏', match: ['/fav'] },
+    { href: '#/follows', text: '我的追剧', match: ['/follows'] },
   ];
 
   const nav = h('nav', { class: 'nav' });
@@ -158,10 +159,14 @@ function renderHeader() {
   window.addEventListener('scroll', () => {
     const y = window.scrollY;
     header.classList.toggle('scrolled', y > 40);
-    if (y > lastY && y > 300) header.classList.add('hide');
+    // ⚠️ 下滚即收起顶栏：原阈值 y>300 会导致用户在 0~300px 区间滚动时，
+    //    内容（播放页按钮组等）滑到顶栏正下方 → 被 fixed 顶栏拦截点击，
+    //    表现为「按钮看得见但点不到」。收紧为「下滚就隐藏、上滚立刻显示」，
+    //    这是移动端常规交互，也彻底避免遮挡。
+    if (y > lastY && y > 60) header.classList.add('hide');
     else header.classList.remove('hide');
     lastY = y;
-  });
+  }, { passive: true });
   markActive();
 }
 
@@ -359,6 +364,7 @@ function buildUserArea() {
     h('a', { href: '#/social?tab=requests', html: '📨<span>好友申请</span>', onclick: () => close() }),
     h('a', { href: '#/social', html: '💌<span>我的私信</span>', onclick: () => close() }),
     h('a', { href: '#/fav', html: '⭐<span>我的收藏</span>', onclick: () => close() }),
+    h('a', { href: '#/follows', html: '🔔<span>我的追剧</span>', onclick: () => close() }),
     h('a', { href: '#/history', html: '🕘<span>观看历史</span>', onclick: () => close() }),
     h('button', { class: 'danger', html: '🚪<span>退出登录</span>', onclick: async () => { await auth.logout(); toast('已退出登录'); renderHeader(); route(); } }),
   ].filter(Boolean));
@@ -442,6 +448,7 @@ async function route() {
     if (seg[0] === 'vod') return pageVod(root, seg[1], seg[2]);
     if (seg[0] === 'search') return pageSearch(root, params.get('q') || '');
     if (seg[0] === 'fav') return pageFav(root);
+    if (seg[0] === 'follows') return pageFollows(root);
     if (seg[0] === 'history') return pageHistory(root);
     if (seg[0] === 'login') return pageAuth(root, 'login');
     if (seg[0] === 'register') return pageAuth(root, 'register');
@@ -963,6 +970,7 @@ async function pageWatch(root, guid) {
         html: '↗ 分享',
         onclick: () => shareLink({ title: info.title || '央视视频' }),
       }),
+      followBtn({ type: 'vod', targetId: guid, title: info.title || '', cover: info.image || '' }),
       h('a', { class: 'btn btn-primary btn-sm', href: '#/', text: '回到首页' }),
     ]),
   ]);
@@ -1544,6 +1552,17 @@ async function pageVod(root, srcId, vodId) {
         html: '↗ 分享',
         onclick: () => shareLink({ title: detail.name || '影视资源' }),
       }),
+      // 追剧：换集时通过 onChange 回写「上次看到第几集」，追剧页一眼看到进度
+      followBtn({
+        type: 'vod',
+        targetId: vodId,
+        title: detail.name || '',
+        cover: detail.pic || '',
+        srcId,
+        lastEp: (lines[0] && lines[0].episodes[0] && (lines[0].episodes[0].name || '')) || '',
+      }, {
+        onChange: () => {},
+      }),
       h('a', { class: 'btn btn-primary btn-sm', href: '#/resource', text: '更多资源' }),
     ]),
   ]);
@@ -1643,6 +1662,11 @@ async function pageVod(root, srcId, vodId) {
 
   function switchEp() {
     saveProgress(true);                   // 切集前先存住上一集进度
+    // 🔔 追剧进度同步：把「第几集」写回服务端，追剧页显示"上次 E03"
+    {
+      const ep = (lines[curLine] && lines[curLine].episodes[curEp]) || {};
+      syncFollowProgress('vod', vodId, ep.name || ('第' + (curEp + 1) + '集'));
+    }
     if (player && player.destroy) { try { player.destroy(); } catch {} }
     playerHost.innerHTML = '';
 
@@ -1854,10 +1878,183 @@ async function pageSearch(root, q) {
 }
 
 /* ============================================================
-   收藏 / 历史
+   追剧关注（#/follows）
+   ------------------------------------------------------------
+   与「收藏」（本地浏览器）不同，关注是**账号级订阅**，存服务端：
+     { type:'vod'|'short'|'live', targetId, title, cover, lastEp }
+   用于追更提醒 —— 剧集更新、短视频/直播开播时一眼看到「上次看到第几集」。
    ============================================================ */
-function pageFav(root) {
+let followsState = { list: [], loadedAt: 0 };
+/** 供分页预取 / 与其他页面共享的轻量缓存 */
+export function invalidateFollows() { followsState.loadedAt = 0; }
+
+async function pageFollows(root) {
   root.appendChild(h('div', { class: 'page-head' }, [
+    h('h1', { class: 'page-title', html: '<span>🔔</span> 我的追剧' }),
+    h('p', { class: 'page-sub', text: '关注后自动记录进度，更新了随时回来接着看' }),
+  ]));
+  const main = h('div', { class: 'main' }, [h('div', { class: 'container' })]);
+  root.appendChild(main);
+  const box = main.querySelector('.container');
+
+  if (!auth.loggedIn) {
+    await auth.refresh();
+  }
+  if (!auth.loggedIn) {
+    box.appendChild(emptyState('🔔', '登录后查看追剧列表', '追剧进度会同步到你的账号，换设备也能继续'));
+    box.appendChild(h('div', { style: { textAlign: 'center' } }, [
+      h('button', {
+        class: 'btn btn-primary',
+        text: '去登录',
+        onclick: () => goReplace('/login?redirect=' + encodeURIComponent('#/follows')),
+      }),
+    ]));
+    return;
+  }
+
+  const loading = h('div', { class: 'page-sub', style: { opacity: '.7' }, text: '加载追剧列表…' });
+  box.appendChild(loading);
+
+  let list = [];
+  try {
+    const d = await api('/api/follows');
+    list = d.list || [];
+    followsState = { list, loadedAt: Date.now() };
+  } catch (e) {
+    loading.remove();
+    box.appendChild(h('div', { class: 'error-box', text: '加载失败：' + e.message }));
+    return;
+  }
+  loading.remove();
+
+  if (!list.length) {
+    box.appendChild(emptyState('🔔', '还没有追的剧', '在播放页或视频详情点「🔔 追剧」，更新了会自动记录进度'));
+    return;
+  }
+
+  // 按类型分组：影视 / 短视频 / 直播
+  const groups = [
+    { type: 'vod', text: '影视剧集', icon: '🎬', url: (it) => '/vod/' + it.srcId + '/' + it.targetId },
+    { type: 'short', text: '短视频', icon: '📱', url: (it) => '/shorts/detail/' + it.targetId },
+    { type: 'live', text: '直播频道', icon: '📡', url: (it) => '/live/' + it.targetId },
+  ];
+  const known = new Set(groups.map((g) => g.type));
+  const rest = list.filter((it) => !known.has(it.type));
+
+  const renderGroup = (g, items) => {
+    if (!items.length) return;
+    box.appendChild(h('div', { class: 'section-head', style: { marginTop: '8px' } }, [
+      h('div', { class: 'section-title' }, [
+        h('span', { class: 'icon', text: g.icon }),
+        h('span', { text: g.text }),
+      ]),
+      h('span', { class: 'page-sub', text: items.length + ' 个' }),
+    ]));
+    const grid = h('div', { class: 'grid follow-grid' });
+    items.forEach((it) => grid.appendChild(followCard(it, g.url(it))));
+    box.appendChild(grid);
+  };
+  groups.forEach((g) => renderGroup(g, list.filter((it) => it.type === g.type)));
+  if (rest.length) renderGroup({ icon: '🔔', text: '其他关注', url: (it) => it.url || '/' }, rest);
+}
+
+/** 追剧卡片：封面（无图用海报占位）+ 标题 + 上次看到第几集 + 一键取关 */
+function followCard(it, href) {
+  const thumb = h('div', { class: 'card-thumb' });
+  if (it.cover) {
+    const img = h('img', { alt: it.title, loading: 'lazy' });
+    img.onerror = () => { img.remove(); thumb.style.background = titleColor(it.title || 'x'); thumb.appendChild(posterFallback(it.title)); };
+    img.src = it.cover;
+    thumb.appendChild(img);
+  } else {
+    thumb.style.background = titleColor(it.title || 'x');
+    thumb.appendChild(posterFallback(it.title));
+  }
+  return h('div', { class: 'card follow-card', title: it.title, onclick: () => go(href) }, [
+    thumb,
+    it.lastEp ? h('div', { class: 'card-dur', text: '上次 ' + it.lastEp }) : null,
+    h('button', {
+      class: 'follow-del',
+      title: '取消关注',
+      html: '✕',
+      onclick: async (e) => {
+        e.stopPropagation();
+        try {
+          await api('/api/follows/toggle', { method: 'POST', body: { type: it.type, targetId: it.targetId, title: it.title } });
+          toast('已取消关注', 'success');
+          invalidateFollows();
+          route();
+        } catch (err) { toast(err.message || '操作失败'); }
+      },
+    }),
+    h('div', { class: 'card-title', text: it.title }),
+  ]);
+}
+
+/**
+ * 追剧按钮（三处共用：央视播放页 / 资源库播放页 / 短视频详情）
+ * @param {{type:'vod'|'short'|'live', targetId:string, title:string, cover?:string, srcId?:string, lastEp?:string}} item
+ * @param {{onChange?:(following:boolean)=>void}} [opts]
+ */
+export function followBtn(item, opts = {}) {
+  const btn = h('button', {
+    class: 'btn btn-ghost btn-sm follow-btn',
+    html: '🔔 追剧',
+    title: '关注更新，记录观看进度',
+  });
+  if (item.lastEp) btn.dataset.lastEp = item.lastEp;
+
+  // 已关注态（静默查询，避免闪烁）
+  (async () => {
+    if (!auth.loggedIn) await auth.refresh().catch(() => {});
+    if (!auth.loggedIn) return;
+    try {
+      const d = await api('/api/follows/check?type=' + encodeURIComponent(item.type) + '&targetId=' + encodeURIComponent(item.targetId));
+      if (d.following) { btn.classList.add('on'); btn.classList.remove('btn-ghost'); btn.classList.add('btn-primary'); btn.innerHTML = '🔕 已追剧'; }
+    } catch { /* 未登录或网络异常：保持默认态 */ }
+  })();
+
+  btn.onclick = async (e) => {
+    e.stopPropagation();
+    if (!auth.loggedIn) {
+      toast('请先登录后追剧');
+      goReplace('/login?redirect=' + encodeURIComponent(location.hash));
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const body = {
+        type: item.type,
+        targetId: item.targetId,
+        title: item.title || '',
+        cover: item.cover || '',
+        lastEp: item.lastEp || '',
+        srcId: item.srcId || '',
+      };
+      const r = await api('/api/follows/toggle', { method: 'POST', body });
+      btn.classList.toggle('on', r.following);
+      btn.classList.toggle('btn-primary', r.following);
+      btn.classList.toggle('btn-ghost', !r.following);
+      btn.innerHTML = r.following ? '🔕 已追剧' : '🔔 追剧';
+      toast(r.following ? '已加入追剧，更新会记录进度' : '已取消追剧', 'success');
+      invalidateFollows();
+      opts.onChange && opts.onChange(r.following);
+    } catch (err) {
+      toast(err.message || '操作失败', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  return btn;
+}
+
+/** 异步补一次「上次看到第几集」（播放页调用，不阻塞渲染） */
+export function syncFollowProgress(type, targetId, lastEp) {
+  if (!auth.loggedIn || !lastEp) return;
+  api('/api/follows/progress', { method: 'POST', body: { type, targetId, lastEp } }).catch(() => {});
+}
+
+function pageFav(root) {  root.appendChild(h('div', { class: 'page-head' }, [
     h('h1', { class: 'page-title', html: '<span>⭐</span> 我的收藏' }),
     h('p', { class: 'page-sub', text: '收藏内容保存在本地浏览器' }),
   ]));

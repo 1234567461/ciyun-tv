@@ -13,6 +13,7 @@
 .player-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 22px 40px; gap: 20px; flex-wrap: wrap;
+  scroll-margin-top: calc(var(--header-h, 68px) + 12px);   /* 锚点跳转时避开固定顶栏 */
 }
 .player-title { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
 .player-meta { font-size: 13.5px; color: var(--text-dim); margin-top: 7px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }

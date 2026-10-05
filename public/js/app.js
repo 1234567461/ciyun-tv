@@ -970,7 +970,7 @@ async function pageWatch(root, guid) {
         html: '↗ 分享',
         onclick: () => shareLink({ title: info.title || '央视视频' }),
       }),
-      followBtn({ type: 'vod', targetId: guid, title: info.title || '', cover: info.image || '' }),
+      followBtn({ type: 'vod', targetId: guid, srcId: 'cctv-official', title: info.title || '', cover: info.image || '' }),
       h('a', { class: 'btn btn-primary btn-sm', href: '#/', text: '回到首页' }),
     ]),
   ]);
@@ -1556,9 +1556,9 @@ async function pageVod(root, srcId, vodId) {
       followBtn({
         type: 'vod',
         targetId: vodId,
+        srcId,
         title: detail.name || '',
         cover: detail.pic || '',
-        srcId,
         lastEp: (lines[0] && lines[0].episodes[0] && (lines[0].episodes[0].name || '')) || '',
       }, {
         onChange: () => {},
@@ -1665,7 +1665,8 @@ async function pageVod(root, srcId, vodId) {
     // 🔔 追剧进度同步：把「第几集」写回服务端，追剧页显示"上次 E03"
     {
       const ep = (lines[curLine] && lines[curLine].episodes[curEp]) || {};
-      syncFollowProgress('vod', vodId, ep.name || ('第' + (curEp + 1) + '集'));
+      // targetId 必须与 followBtn 用同一个 followKey，否则进度写不进同一条追剧记录
+      syncFollowProgress('vod', followKey(vodId, srcId), ep.name || ('第' + (curEp + 1) + '集'), detail.name || '');
     }
     if (player && player.destroy) { try { player.destroy(); } catch {} }
     playerHost.innerHTML = '';
@@ -1933,8 +1934,10 @@ async function pageFollows(root) {
   }
 
   // 按类型分组：影视 / 短视频 / 直播
+  //   vod 的 targetId 形如 "srcId:rawId"（见 followKey），
+  //   跳转时反解出源与原始 ID，保证回到真正可播的播放页。
   const groups = [
-    { type: 'vod', text: '影视剧集', icon: '🎬', url: (it) => '/vod/' + it.srcId + '/' + it.targetId },
+    { type: 'vod', text: '影视剧集', icon: '🎬', url: (it) => { const { srcId, rawId } = parseFollowKey(it.targetId); return srcId ? '/vod/' + srcId + '/' + rawId : '/watch/' + rawId; } },
     { type: 'short', text: '短视频', icon: '📱', url: (it) => '/shorts/detail/' + it.targetId },
     { type: 'live', text: '直播频道', icon: '📡', url: (it) => '/live/' + it.targetId },
   ];
@@ -1992,24 +1995,57 @@ function followCard(it, href) {
 }
 
 /**
+ * 追剧 targetId 规范化：保证「同一部剧」在任何入口拿到的 key 一致。
+ *
+ * 历史坑：央视播放页传裸 guid、资源库播放页传 vodId、合集传 col:xxx，
+ *        同一部剧从不同入口追会各记一条 → 取关一条后另一条还在，
+ *        表现为「追没追都提示/按钮状态反复」。
+ * 规范：[srcId:]rawId  —— 带源前缀，全局唯一且可反解回 /vod/:src/:id
+ * @param {string} rawId
+ * @param {string} [srcId]
+ */
+export function followKey(rawId, srcId) {
+  const id = String(rawId == null ? '' : rawId).trim();
+  if (!id) return '';
+  // 已带前缀（含 ":" 且前缀是采集源）→ 原样返回，避免二次拼接
+  if (/^[a-z0-9_-]+:/i.test(id) && String(srcId || '') && id.startsWith(srcId + ':')) return id;
+  const src = String(srcId || '').trim();
+  return src ? src + ':' + id : id;
+}
+
+/** 从 followKey 反解出 { srcId, rawId }，供「追剧页点击跳回播放页」用 */
+export function parseFollowKey(key) {
+  const s = String(key || '');
+  const i = s.indexOf(':');
+  if (i <= 0) return { srcId: '', rawId: s };
+  return { srcId: s.slice(0, i), rawId: s.slice(i + 1) };
+}
+
+/**
  * 追剧按钮（三处共用：央视播放页 / 资源库播放页 / 短视频详情）
  * @param {{type:'vod'|'short'|'live', targetId:string, title:string, cover?:string, srcId?:string, lastEp?:string}} item
  * @param {{onChange?:(following:boolean)=>void}} [opts]
  */
 export function followBtn(item, opts = {}) {
+  // 统一 key：影视类带源前缀，避免不同入口各记一条（见 followKey 注释）
+  const key = item.type === 'vod' ? followKey(item.targetId, item.srcId) : String(item.targetId || '');
+  const payload = { ...item, targetId: key };
   const btn = h('button', {
     class: 'btn btn-ghost btn-sm follow-btn',
     html: '🔔 追剧',
     title: '关注更新，记录观看进度',
   });
-  if (item.lastEp) btn.dataset.lastEp = item.lastEp;
+  if (payload.lastEp) btn.dataset.lastEp = payload.lastEp;
 
   // 已关注态（静默查询，避免闪烁）
   (async () => {
     if (!auth.loggedIn) await auth.refresh().catch(() => {});
     if (!auth.loggedIn) return;
     try {
-      const d = await api('/api/follows/check?type=' + encodeURIComponent(item.type) + '&targetId=' + encodeURIComponent(item.targetId));
+      const qs = 'type=' + encodeURIComponent(payload.type)
+        + '&targetId=' + encodeURIComponent(key)
+        + '&title=' + encodeURIComponent(payload.title || '');
+      const d = await api('/api/follows/check?' + qs);
       if (d.following) { btn.classList.add('on'); btn.classList.remove('btn-ghost'); btn.classList.add('btn-primary'); btn.innerHTML = '🔕 已追剧'; }
     } catch { /* 未登录或网络异常：保持默认态 */ }
   })();
@@ -2024,12 +2060,12 @@ export function followBtn(item, opts = {}) {
     btn.disabled = true;
     try {
       const body = {
-        type: item.type,
-        targetId: item.targetId,
-        title: item.title || '',
-        cover: item.cover || '',
-        lastEp: item.lastEp || '',
-        srcId: item.srcId || '',
+        type: payload.type,
+        targetId: key,
+        title: payload.title || '',
+        cover: payload.cover || '',
+        lastEp: payload.lastEp || '',
+        srcId: payload.srcId || '',
       };
       const r = await api('/api/follows/toggle', { method: 'POST', body });
       btn.classList.toggle('on', r.following);
@@ -2049,9 +2085,9 @@ export function followBtn(item, opts = {}) {
 }
 
 /** 异步补一次「上次看到第几集」（播放页调用，不阻塞渲染） */
-export function syncFollowProgress(type, targetId, lastEp) {
+export function syncFollowProgress(type, targetId, lastEp, title) {
   if (!auth.loggedIn || !lastEp) return;
-  api('/api/follows/progress', { method: 'POST', body: { type, targetId, lastEp } }).catch(() => {});
+  api('/api/follows/progress', { method: 'POST', body: { type, targetId, lastEp, title } }).catch(() => {});
 }
 
 function pageFav(root) {  root.appendChild(h('div', { class: 'page-head' }, [
@@ -2659,6 +2695,113 @@ function eyeIcon(open) {
 /* ============================================================
    通过邀请链接加入家庭
    ============================================================ */
+/* ============================================================
+   创作者主页（#/u/:account）
+   ------------------------------------------------------------
+   ⚠️ 此前路由 /u/:account 指向未定义的 pageUserProfile，
+   属于死路由（访问即报错）。这里补全实现：
+   头像/昵称/简介 + 粉丝数/关注数/作品数 + 关注按钮 + 作品列表。
+   ============================================================ */
+async function pageUserProfile(root, account) {
+  const acc = String(account || '').toLowerCase();
+  root.appendChild(h('div', { class: 'page-head' }, [
+    h('h1', { class: 'page-title', html: '<span>👤</span> 创作者主页' }),
+  ]));
+  const main = h('div', { class: 'main' }, [h('div', { class: 'container' })]);
+  root.appendChild(main);
+  const box = main.querySelector('.container');
+  box.appendChild(h('div', { class: 'page-sub', style: { opacity: '.7' }, text: '加载中…' }));
+
+  let st;
+  try {
+    st = await api('/api/users/' + encodeURIComponent(acc) + '/stats');
+  } catch (e) {
+    box.innerHTML = '';
+    box.appendChild(emptyState('👤', '找不到这个用户', e.message || ''));
+    return;
+  }
+  let works = [];
+  try {
+    const d = await api('/api/shorts?page=1&size=50&account=' + encodeURIComponent(acc) + '&sort=new');
+    works = (d.list || []).filter((x) => x.status !== 'hidden');
+  } catch { /* 首页可能不支持 account 过滤，忽略 */ }
+
+  box.innerHTML = '';
+
+  // 头部卡片：头像 + 昵称 + 简介 + 统计 + 关注按钮
+  //   st.following      = 我是否已关注 TA（布尔，服务端算好）
+  //   st.followingCount = TA 关注了多少人（数字）
+  const isSelf = !!auth.loggedIn && String(auth.user.account || '').toLowerCase() === acc;
+  const followToggle = h('button', {
+    class: 'btn ' + (st.following ? 'btn-ghost' : 'btn-primary'),
+    html: st.following ? '🔕 已关注' : '🔔 关注',
+  });
+  const followerNum = h('div', { class: 'pu-num', text: String(st.followers || 0) });
+  followToggle.onclick = async () => {
+    if (!auth.loggedIn) {
+      toast('请先登录');
+      goReplace('/login?redirect=' + encodeURIComponent('#/u/' + acc));
+      return;
+    }
+    followToggle.disabled = true;
+    try {
+      const r = await api('/api/users/' + encodeURIComponent(acc) + '/follow', { method: 'POST' });
+      followToggle.classList.toggle('btn-primary', r.following);
+      followToggle.classList.toggle('btn-ghost', !r.following);
+      followToggle.innerHTML = r.following ? '🔕 已关注' : '🔔 关注';
+      followerNum.textContent = String(r.followers != null ? r.followers : st.followers);
+      toast(r.following ? '已关注 ' + st.nickname : '已取消关注', 'success');
+    } catch (e) { toast(e.message || '操作失败', 'error'); }
+    finally { followToggle.disabled = false; }
+  };
+
+  box.appendChild(
+    h('div', { class: 'pu-head' }, [
+      avatarEl({ nickname: st.nickname, avatar: st.avatar }, 'xl'),
+      h('div', { class: 'pu-info' }, [
+        h('div', { class: 'pu-name' }, [
+          h('span', { text: st.nickname }),
+          st.vip ? h('span', { class: 'tag tag-primary', text: 'VIP' }) : null,
+        ]),
+        st.bio ? h('div', { class: 'pu-bio', text: st.bio }) : null,
+        h('div', { class: 'pu-stats' }, [
+          h('div', { class: 'pu-stat' }, [followerNum, h('div', { class: 'pu-key', text: '粉丝' })]),
+          h('div', { class: 'pu-stat' }, [h('div', { class: 'pu-num', text: String(st.followingCount || 0) }), h('div', { class: 'pu-key', text: '关注' })]),
+          h('div', { class: 'pu-stat' }, [h('div', { class: 'pu-num', text: String(st.works || 0) }), h('div', { class: 'pu-key', text: '作品' })]),
+          h('div', { class: 'pu-stat' }, [h('div', { class: 'pu-num', text: fmtNum(st.totalLikes || 0) }), h('div', { class: 'pu-key', text: '获赞' })]),
+        ]),
+      ]),
+      isSelf ? h('a', { class: 'btn btn-ghost', href: '#/profile', text: '编辑资料' }) : followToggle,
+    ])
+  );
+
+  // 作品列表
+  box.appendChild(h('div', { class: 'section-head', style: { marginTop: '26px' } }, [
+    h('div', { class: 'section-title' }, [h('span', { class: 'icon', text: '🎬' }), h('span', { text: '他的作品' })]),
+    h('span', { class: 'page-sub', text: works.length ? works.length + ' 条' : '' }),
+  ]));
+  if (!works.length) {
+    box.appendChild(emptyState('🎬', '还没有公开作品', ''));
+    return;
+  }
+  const grid = h('div', { class: 'sh-grid' });
+  works.forEach((it) => {
+    grid.appendChild(h('div', {
+      class: 'sh-gcard',
+      onclick: () => go('/shorts/detail/' + it.id),
+    }, [
+      h('div', { class: 'sh-gcover' }, [
+        it.cover
+          ? h('img', { class: 'sh-gimg', src: it.cover, alt: it.title, loading: 'lazy' })
+          : h('div', { class: 'sh-gimg', style: { background: titleColor(it.title || 'x') } }),
+        h('span', { class: 'sh-gviews', text: '▶ ' + fmtNum(it.views || 0) }),
+      ]),
+      h('div', { class: 'sh-gtitle', text: it.title }),
+    ]));
+  });
+  box.appendChild(grid);
+}
+
 async function pageJoin(root, code) {
   const main = h('div', { class: 'main' }, [h('div', { class: 'container profile-page' })]);
   root.appendChild(main);

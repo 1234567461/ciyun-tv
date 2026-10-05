@@ -10,9 +10,22 @@
 }
 .player-wrap video { width: 100%; height: 100%; display: block; }
 
+/* 资源库播放页的播放器宿主。
+   ⚠️ 缺此规则时：Player 内部根节点 .vp 是 position:absolute，
+   会相对「视口」铺满全屏，把下方 .player-head（追剧 / 收藏 / 分享按钮）
+   整块盖住 —— 表现为「按钮点不到／点上去像在报播放错误」。 */
+.player-host {
+  position: relative;
+  width: 100%; background: #000;
+  aspect-ratio: 16 / 9; max-height: calc(100vh - var(--header-h) - 2px);
+}
+.player-host > video { width: 100%; height: 100%; display: block; }
+
 .player-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 22px 40px; gap: 20px; flex-wrap: wrap;
+  position: relative; z-index: 5;                     /* 始终位于播放器层之上，避免按钮被盖 */
+  background: var(--bg, transparent);                  /* 保证按钮区域可点击、可读 */
   scroll-margin-top: calc(var(--header-h, 68px) + 12px);   /* 锚点跳转时避开固定顶栏 */
 }
 .player-title { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }

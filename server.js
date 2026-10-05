@@ -584,6 +584,21 @@ app.get('/api/stream', async (req, res) => {
   // 幂等：若传入地址本身已是被包裹过的代理地址，解出真实地址
   const m = /\/api\/stream\?url=(.+)$/.exec(url);
   if (m) url = decodeURIComponent(m[1]);
+
+  // 裸央视 guid（32 位 hex）：资源库／合集源的 episodes[].url 只存 guid，
+  //   直接当 URL 代理会被判 invalid url → 播放器 400。
+  //   这里在入口统一解析成真实 m3u8，调用方无需关心。
+  if (/^[0-9a-f]{32}$/i.test(url)) {
+    try {
+      const info = await cctv.getPlayInfo(url);
+      const real = (info && (info.hls || info.hlsEnc || info.flv)) || '';
+      if (!real) return res.status(502).send('no playable source for guid ' + url);
+      url = real;
+    } catch (e) {
+      return res.status(502).send('resolve guid failed: ' + e.message);
+    }
+  }
+
   if (!/^https?:\/\//i.test(url)) return res.status(400).send('invalid url');
 
   // 🔒 SSRF 防护：解析真实 IP，拦截内网/保留地址，避免被用作内网探测跳板
@@ -1233,11 +1248,14 @@ app.post('/api/admin/import', requireAdmin, (req, res) => {
  * 用户端：账号系统（注册 / 登录 / 资料 / 改密）
  * ============================================================ */
 
-/** 取当前登录用户（cookie: cy_user） */
+/** 取当前登录用户（cookie: cy_user，兼容 Authorization: Bearer） */
 function currentUser(req) {
-  const token = req.cookies && req.cookies['cy_user'];
+  // ⚠️ 必须用 clientToken（cookie + Bearer 双通道）。
+  //    旧实现只在「存在 cookie」时才继续，导致纯 Bearer 请求
+  //    （App / 分享页 / 跨端唤起）一律被判未登录。
+  const token = clientToken(req, 'cy_user');
   if (!token) return null;
-  const sess = store.getSession(clientToken(req, 'cy_user'));
+  const sess = store.getSession(token);
   if (!sess || sess.role !== 'user') return null;
   const u = store.findUser(sess.account);
   return u || null;
@@ -1269,35 +1287,6 @@ const ADMIN_PRIVILEGE = {
   lastPlan: 'admin',
   permanent: true,
 };
-
-/** 用户信息脱敏输出 */
-function publicUser(u) {
-  if (!u) return null;
-  const cfg = store.settings.monetize || {};
-  const now = Date.now();
-  const isAdm = isAdminAccount(u.account);
-  const own = (u.vip && u.vip.expire > now) || isAdm;
-  return {
-    account: u.account,
-    nickname: u.nickname || u.account,
-    email: u.email || '',
-    avatar: u.avatar || '',
-    bio: u.bio || '',
-    createdAt: u.createdAt || 0,
-    vip: isAdm ? ADMIN_PRIVILEGE : (u.vip || null),
-    vipActive: !!own,
-    vipDaysLeft: isAdm ? 36500 : (own ? Math.ceil((u.vip.expire - now) / 86400000) : 0),
-    isAdmin: isAdm,
-    adminPrivilege: isAdm,
-    unlimited: isAdm,
-    quota: pay.quotaView(u, { cfg, isAdmin: isAdm, isVip: own }),
-    balance: isAdm ? null : Math.round(((u.balance || 0)) * 100) / 100,
-    currency: cfg.currency || '¥',
-    stats: {
-      comments: (store.getComments().filter((c) => c.account === u.account && c.status !== 'deleted') || []).length,
-    },
-  };
-}
 
 /** 注册参数规则（给前端展示） */
 app.get('/api/user/rules', (req, res) => {
@@ -3609,6 +3598,10 @@ function shortView(s, viewer) {
     comments: store.getComments().filter((c) => c.targetId === 'short:' + s.id && c.status !== 'deleted').length,
     status: s.status || 'pending',
     createdAt: s.createdAt,
+    // 作者维度：粉丝数（多少人订阅了他）+ 他的作品数，用于详情页展示与分享
+    authorFollowers: store.followerCount(s.account),
+    authorWorks: store.getShorts({ account: s.account }).length,
+    following: viewer ? store.isFollowingUser(viewer, s.account) : false,
     // 播放地址（走统一代理，支持 Range）
     src: `/api/shorts/${s.id}/video`,
   };
@@ -4165,15 +4158,29 @@ app.get('/api/social/unread', requireSocial, (req, res) => {
   res.json({ unread: store.unreadCount(req.user.account) });
 });
 
+/** 追剧项脱敏：去掉服务端内部字段（account 等），并补出可反解的 srcId */
+function publicFollow(f) {
+  if (!f) return null;
+  return {
+    type: f.type,
+    targetId: f.targetId,
+    title: f.title || '',
+    cover: f.cover || '',
+    lastEp: f.lastEp || '',
+    note: f.note || '',
+    updatedAt: f.updatedAt || 0,
+  };
+}
+
 app.get('/api/follows', requireUser, (req, res) => {
-  res.json({ list: store.getFollows(req.user.account) });
+  res.json({ list: store.getFollows(req.user.account).map(publicFollow) });
 });
 
-/** 是否已追（单项查询） */
+/** 是否已追（单项查询，跨入口按「同一目标」归一匹配） */
 app.get('/api/follows/check', requireUser, (req, res) => {
-  const { type, targetId } = req.query;
-  const f = store.findFollow(req.user.account, type, targetId);
-  res.json({ following: !!f, item: f || null });
+  const { type, targetId, title } = req.query;
+  const f = store.findFollow(req.user.account, type, targetId, title);
+  res.json({ following: !!f, item: publicFollow(f) });
 });
 
 /** 追 / 取关 */
@@ -4193,9 +4200,54 @@ app.post('/api/follows/toggle', requireUser, (req, res) => {
 
 /** 更新追剧进度 */
 app.post('/api/follows/progress', requireUser, (req, res) => {
-  const { type, targetId, lastEp = '' } = req.body || {};
-  const f = store.touchFollow(req.user.account, type, targetId, { lastEp: String(lastEp).slice(0, 40) });
-  res.json({ ok: !!f, item: f || null });
+  const { type, targetId, lastEp = '', title = '' } = req.body || {};
+  const f = store.touchFollow(req.user.account, type, targetId, { lastEp: String(lastEp).slice(0, 40), title: String(title).slice(0, 100) });
+  res.json({ ok: !!f, item: publicFollow(f) });
+});
+
+/** 某人的粉丝数 / 关注数（公开接口，未登录也能看） */
+app.get('/api/users/:account/stats', (req, res) => {
+  const acc = String(req.params.account || '').toLowerCase();
+  const u = store.findUser(acc);
+  if (!u) return res.status(404).json({ error: '用户不存在' });
+  const shorts = (store.getShorts ? store.getShorts() : []).filter(
+    (s) => String(s.account).toLowerCase() === acc && s.status !== 'hidden'
+  );
+  // ⚠️ 字段语义必须分清（历史 bug：把 followingCount 当作 following 用，
+  //    导致前端「我是否已关注」判断恒为真 → 永远显示「已关注」）：
+  //      following      = 当前登录者「有没有关注 TA」（布尔）
+  //      followingCount = TA「关注了多少人」（数字）
+  const me = currentUser(req);
+  const following = me ? store.isFollowingUser(me.account, acc) : false;
+  res.json({
+    account: acc,
+    nickname: u.nickname || acc,
+    avatar: u.avatar || '',
+    bio: u.bio || '',
+    followers: store.followerCount(acc),           // 多少人订阅/关注了 TA
+    following,                                    // 我是否已关注 TA（未登录恒 false）
+    followingCount: store.followingCount(acc),    // TA 关注了多少人
+    works: shorts.length,                          // 作品数
+    totalViews: shorts.reduce((n, s) => n + (s.views || 0), 0),
+    totalLikes: shorts.reduce((n, s) => n + ((s.likes || []).length), 0),
+    vip: (u.vip && u.vip.expire > Date.now()) || false,
+  });
+});
+
+/** 关注 / 取关某个用户（创作者） */
+app.post('/api/users/:account/follow', requireUser, (req, res) => {
+  const me = req.user.account;
+  const target = String(req.params.account || '').toLowerCase();
+  if (target === me) return res.status(400).json({ error: '不能关注自己' });
+  const u = store.findUser(target);
+  if (!u) return res.status(404).json({ error: '用户不存在' });
+  const r = store.toggleFollow(me, {
+    type: 'user',
+    targetId: target,
+    title: u.nickname || target,          // 便于「我的追剧」页直接展示
+    cover: u.avatar || '',
+  });
+  res.json({ ...r, followers: store.followerCount(target) });
 });
 
 /* ============================================================

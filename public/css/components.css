@@ -937,3 +937,22 @@ body.cy-sheet-locked { overflow: hidden; }
   display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer;
 }
 .sh-detail-acts .follow-btn:not(.on) { color: rgba(255,255,255,.82); }
+
+/* —— 创作者主页（#/u/:account）—— */
+.pu-head {
+  display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+  padding: 26px; border-radius: 16px; background: var(--bg-card, #16161d);
+  border: 1px solid var(--border, rgba(255,255,255,.08));
+}
+.pu-info { flex: 1; min-width: 220px; }
+.pu-name { display: flex; align-items: center; gap: 9px; font-size: 21px; font-weight: 700; }
+.pu-bio { font-size: 13.5px; color: var(--text-dim, #a0a0b0); margin-top: 7px; line-height: 1.6; }
+.pu-stats { display: flex; gap: 30px; margin-top: 15px; flex-wrap: wrap; }
+.pu-stat { text-align: left; }
+.pu-num { font-size: 19px; font-weight: 700; }
+.pu-key { font-size: 12px; color: var(--text-mute, #8b8b9c); margin-top: 1px; }
+@media (max-width: 640px) {
+  .pu-head { padding: 20px 16px; gap: 14px; }
+  .pu-stats { gap: 20px; }
+  .pu-name { font-size: 18px; }
+}

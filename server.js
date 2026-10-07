@@ -3610,12 +3610,41 @@ function shortView(s, viewer) {
 /**
  * 上传短视频
  * POST /api/shorts/upload  (multipart/form-data)
+ * GET  /api/shorts/upload  → 能力探测（返回支持的字段/限制，不写库）
  * fields: video(文件), title, desc, tags, cover
  *
  * 安全说明：全程流式落盘到临时目录 → 七层校验 → 校验通过才移入正式目录。
+ *
+ * ⚠️ 用 app.all 而非 app.post：部分客户端/代理/表单会在正式上传前先发 GET
+ *    探测端点连通性，或受中间设备影响把方法改写成 GET。只注册 POST 时这些
+ *    请求会直接 404，表现为「某些人没法上传视频」。故 GET 也放通，返回能力
+ *    说明（不消耗配额、不写库），POST 才走真正的入库逻辑。
  */
-app.post(
+app.all(
   '/api/shorts/upload',
+  // GET/HEAD/OPTIONS：仅做连通性 & 能力探测，不要求登录、不占上传配额。
+  // 放在 requireUser 之前 —— 未登录用户/爬虫/代理探测也不该拿到 401/404。
+  (req, res, next) => {
+    if (req.method === 'POST') return next();
+    const u = currentUser(req);
+    res.setHeader('Allow', 'GET, POST, HEAD, OPTIONS');
+    return res.json({
+      ok: true,
+      endpoint: '/api/shorts/upload',
+      method: 'POST',
+      contentType: 'multipart/form-data',
+      fields: {
+        video: '视频文件（必填，支持 mp4/mov/webm/mkv 等）',
+        title: '标题（必填，≤80 字）',
+        desc: '说明（选填，≤500 字）',
+        tags: '标签（选填，逗号/空格分隔，≤8 个）',
+        cover: '封面地址（选填）',
+      },
+      maxSize: Number(process.env.MAX_UPLOAD_MB || 0) || '默认（见服务端配置）',
+      authed: !!u,
+      user: (u && u.account) || null,
+    });
+  },
   requireUser,
   (req, res, next) => {
     // 独立限流：每用户每小时最多 20 次上传

@@ -203,14 +203,20 @@ async function renderFeed(root, params) {
   wrap.addEventListener('touchend', onTouchEnd, { passive: true });
 
   // 离开页面时清理（SPA 切页不触发 beforeunload，用 MutationObserver 兜底）
+  let _feedTorn = false;
   const cleanup = () => {
+    if (_feedTorn) return;
+    _feedTorn = true;
     window.removeEventListener('keydown', onKey);
-    cards.forEach((c) => c.destroy());
+    window.removeEventListener('hashchange', onHashFeed);
+    cards.forEach((c) => { try { c.destroy(); } catch {} });
   };
+  const onHashFeed = () => { if (!wrap.isConnected) cleanup(); };
   const mo = new MutationObserver(() => {
     if (!wrap.isConnected) { cleanup(); mo.disconnect(); }
   });
   mo.observe(root, { childList: true });
+  window.addEventListener('hashchange', onHashFeed);
   window.addEventListener('pagehide', cleanup, { once: true });
 
   activate(0);
@@ -559,6 +565,36 @@ export async function renderShortDetail(root, id) {
     const { mountComments } = await import('./comments.js');
     mountComments(box.querySelector('#sh-comments'), { targetId: 'short:' + id, targetType: 'video' });
   } catch { /* 评论组件不可用时忽略 */ }
+
+  // ⚠️ 离开页面时彻底停掉 <video>。
+  //    与点播播放页同源的 bug：SPA 切页只是把 DOM 摘掉，<video> 仍在后台
+  //    播放、继续拉流，表现为「不关网站就一直有一卡一卡的声音」。
+  //    这里显式 pause + 清 src + load()，强制释放解码器与音频输出。
+  let _shTorn = false;
+  const shTeardown = () => {
+    if (_shTorn) return;
+    _shTorn = true;
+    try {
+      video.pause();
+      video.muted = true;
+      video.removeAttribute('src');
+      video.load();
+    } catch {}
+    try {
+      // 兜底：本页内所有游离 video/audio 一并停掉
+      box.querySelectorAll('video, audio').forEach((el) => {
+        try { el.pause(); } catch {}
+        try { el.removeAttribute('src'); el.load(); } catch {}
+      });
+    } catch {}
+  };
+  const shMO = new MutationObserver(() => {
+    if (!box.isConnected) { shTeardown(); shMO.disconnect(); }
+  });
+  shMO.observe(root, { childList: true });
+  const shHash = () => { if (!box.isConnected) shTeardown(); };
+  window.addEventListener('hashchange', shHash);
+  window.addEventListener('pagehide', shTeardown, { once: true });
 }
 
 /* ============================================================

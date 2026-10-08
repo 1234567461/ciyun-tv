@@ -408,6 +408,8 @@ export class Player {
           this.hls.loadSource(url);
           this.hls.attachMedia(this.video);
           this.hls.on(Hls.Events.ERROR, (evt, data) => {
+            if (this._destroyed) return;   // 已销毁：忽略一切迟到的错误事件，
+                                           // 否则会在这里重新 startLoad() 把流拉回来
             if (!data.fatal) return;   // 非致命错误 hls.js 自行处理，不干预
             // ⚠️ 直播场景网络抖动是常态（CDN 切节点、分片重试都会触发 NETWORK_ERROR）。
             //    因此这里必须用「连续失败」计数：只要中间成功拉到过数据就清零，
@@ -540,9 +542,19 @@ export class Player {
   }
 
   _destroyEngine() {
-    if (this.hls) { try { this.hls.destroy(); } catch {} this.hls = null; }
-    if (this.flv) { try { this.flv.destroy(); } catch {} this.flv = null; }
+    // ⚠️ 顺序很重要：先 stopLoad() 让 hls.js 停止调度新的分片请求，
+    //    再 destroy()。只调 destroy() 时，已在队列里的分片请求仍会被发出，
+    //    导致「页面已离开，后台还在按分片周期拉流」。
+    if (this.hls) {
+      try { this.hls.stopLoad(); } catch {}
+      try { this.hls.detachMedia(); } catch {}
+      try { this.hls.destroy(); } catch {}
+      this.hls = null;
+    }
+    if (this.flv) { try { this.flv.unload(); } catch {} try { this.flv.detachMedia(); } catch {} try { this.flv.destroy(); } catch {} this.flv = null; }
     if (this.dash) { try { this.dash.reset(); } catch {} this.dash = null; }
+    // 清掉 video 上可能残留的 hls 引用，避免后续逻辑误用已销毁实例
+    try { if (this.video) delete this.video._hls; } catch {}
   }
 
   /** 切换线路 */
@@ -614,8 +626,28 @@ export class Player {
     clearTimeout(this._tipTimer);
     clearTimeout(this._netTimer);
     document.removeEventListener('keydown', this._keyHandler);
-    this._destroyed = true;   // 阻止 emptied 兜底逻辑在销毁后继续拉起播放
+    this._destroyed = true;   // ⚠️ 必须先置位：让所有异步回调（ERROR 处理器、
+                              //    emptied 兜底、定时器）立即失效，防止它们
+                              //    在销毁过程中重新 startLoad() / play() 把流拉回来
+
+    // 顺序：① 先拆引擎（停止调度新分片）→ ② 再停 video（释放解码器与音频输出）。
+    // 反过来做的话，video.load() 会和引擎销毁竞争，反而多发出一批请求。
     this._destroyEngine();
+
+    // ② 停掉 <video> 本身。
+    //    只 hls.destroy() 不够 —— video 元素仍可能输出残留音频，
+    //    表现为「人离开播放页了，声音还在一卡一卡地响」。
+    try {
+      const v = this.video;
+      if (v) {
+        v.pause();
+        v.muted = true;
+        v.removeAttribute('src');
+        try { [...v.querySelectorAll('source')].forEach((s) => s.remove()); } catch {}
+        v.load();          // 触发资源释放，停止一切后台拉流/解码
+      }
+    } catch {}
+
     this.el.innerHTML = '';
   }
 }

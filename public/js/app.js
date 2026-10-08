@@ -1530,17 +1530,14 @@ async function pageVod(root, srcId, vodId) {
 
   // 播放器（经本地 /api/stream 代理，规避跨域与防盗链）
   const proxied = (u) => '/api/stream?url=' + encodeURIComponent(u);
-  let player = new Player(playerHost, {
-    lines: [{ id: 'main', name: '线路 1', type: 'hls', url: proxied(playUrl()) }],
-    title: info.title,
-    poster: info.image,
-    autoplay: true,
-    autoFailover: true,
-    onEnded: () => {
-      // 自动下一集
-      if (curEp < lines[curLine].episodes.length - 1) { curEp += 1; switchEp(); }
-    },
-  });
+  // ⚠️ 这里【不要】预先 new Player。
+  //    以前在此处先建了一个占位播放器，紧接着函数末尾又调 switchEp() 重建，
+  //    等于同一页面创建了 2 个 <video> + 2 个 hls.js 实例。第一个刚创建就
+  //    开始拉流，随后被 destroy —— 但异步竞态下它的 hls 加载器没被干净停掉，
+  //    变成「幽灵播放器」：DOM 里看不到，却在后台按分片周期持续拉流、继续
+  //    输出声音。这就是「看完视频不关网站，还会有一卡一卡的声音」的根源。
+  //    改为只声明、不初始化，由下方 switchEp() 统一负责首次创建。
+  let player = null;
 
   // 头部信息
   const headBar = h('div', { class: 'player-head' }, [
@@ -1665,16 +1662,49 @@ async function pageVod(root, srcId, vodId) {
   // SPA 切页不会触发 beforeunload，这里用 pagehide 兜住真正的关页/刷新
   const onLeave = () => saveProgress(true);
   window.addEventListener('pagehide', onLeave);
-  // 路由切走（DOM 被替换）时立即落盘：观察父容器，一旦本页被摘除就保存
+  // 路由切走（DOM 被替换）时立即落盘并彻底销毁播放器。
+  //
+  // ⚠️ 血泪 bug：以前这里只做了 saveProgress + 清定时器，**唯独没销毁 player**。
+  //    SPA 切页只是把 DOM 摘掉，<video> 元素和 hls.js 实例仍然活着：
+  //      · hls.js 继续下载/解码分片，白白吃流量和 CPU
+  //      · <video> 的音频输出没有停止 → 「看完视频不关网站，还在响，
+  //        而且是一卡一卡的声音」（因为分片还在断续地喂给它）
+  //    必须显式 destroy()：停掉 hls/flv 引擎、清空 src、调用 load() 释放解码器。
+  let _torn = false;
+  let _onHash = null;   // 在下方定义，teardown 里引用以便解绑
+  const teardown = () => {
+    if (_torn) return;
+    _torn = true;
+    saveProgress(true);
+    clearInterval(saveTimer);
+    window.removeEventListener('pagehide', onLeave);
+    if (_onHash) window.removeEventListener('hashchange', _onHash);
+    lifeObserver.disconnect();
+    if (player && player.destroy) { try { player.destroy(); } catch {} }
+    player = null;
+    playerHost.innerHTML = '';
+    // 兜底：万一还有游离的 video 元素在发声，一并静音停掉
+    try {
+      document.querySelectorAll('video, audio').forEach((el) => {
+        if (!el.isConnected) {
+          try { el.pause(); } catch {}
+          try { el.removeAttribute('src'); el.load(); } catch {}
+        }
+      });
+    } catch {}
+  };
   const lifeObserver = new MutationObserver(() => {
-    if (!playerHost.isConnected) {
-      saveProgress(true);
-      clearInterval(saveTimer);
-      window.removeEventListener('pagehide', onLeave);
-      lifeObserver.disconnect();
-    }
+    if (!playerHost.isConnected) teardown();
   });
   lifeObserver.observe(root, { childList: true });
+  // 兜底：部分路由替换方式不触发 MutationObserver（如整棵子树重建），
+  // 用 hashchange 再兜一层 —— 只要仍在播放页就不动，离开就销毁。
+  const onHash = () => {
+    if (!playerHost.isConnected) teardown();
+    else if (!/^#\/vod\/|^#\/live\//.test(location.hash)) teardown();
+  };
+  _onHash = onHash;
+  window.addEventListener('hashchange', onHash);
 
   function switchEp() {
     saveProgress(true);                   // 切集前先存住上一集进度

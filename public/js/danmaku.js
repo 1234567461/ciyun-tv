@@ -5,6 +5,7 @@
 
 import { h, api, toast } from './util.js';
 import { auth } from './auth.js';
+import { imagePicker, imgViews, openLightbox } from './media.js';
 
 const COLORS = ['#ffffff', '#ff6b6b', '#ffd93d', '#6bcbff', '#a78bfa', '#4ade80', '#f472b6'];
 
@@ -26,6 +27,7 @@ export function createDanmaku(layer, opts = {}) {
     es: null,
     esGlobal: null,
     timers: new Set(),
+    imageEnabled: false, // 站点是否开启图片弹幕（由控制条探测后回写）
   };
 
   const measure = () => {
@@ -42,11 +44,32 @@ export function createDanmaku(layer, opts = {}) {
     if (dm.scope === 'global' && state.scope !== 'global' && !dm._force) {
       // 全站弹幕仅在开启全站模式时展示（也可选择始终混显）
     }
+    // 图片弹幕：SSE 给原始 attachments，历史接口给补全 URL 的 images
+    const imgs = (dm.images && dm.images.length) ? imgViews(dm.images) : imgViews(dm.attachments);
+    const pic = imgs[0];   // 一条弹幕最多一张图
+
     const el = h('div', {
-      class: 'dm-item dm-' + (dm.position || 'scroll'),
-      text: dm.content,
+      class: 'dm-item dm-' + (dm.position || 'scroll') + (pic ? ' dm-pic' : ''),
     });
-    el.style.color = dm.color || '#fff';
+
+    if (pic) {
+      // 高度受轨道限制，宽度按原比例自适应，避免飘过一颗巨图
+      const ratio = (pic.w && pic.h) ? (pic.w / pic.h) : 1.6;
+      const boxH = Math.max(38, state.trackH - 4);
+      const img = h('img', {
+        src: pic.thumb || pic.url,
+        alt: pic.name || '弹幕图片',
+        loading: 'lazy',
+        style: { height: boxH + 'px', width: Math.round(boxH * ratio) + 'px' },
+      });
+      img.addEventListener('click', (e) => { e.stopPropagation(); openLightbox(imgs, 0); });
+      el.appendChild(img);
+      if (dm.content) el.appendChild(h('span', { class: 'dm-pic-cap', text: dm.content }));
+      el.style.color = dm.color || '#fff';
+    } else {
+      el.textContent = dm.content;
+      el.style.color = dm.color || '#fff';
+    }
 
     if ((dm.position || 'scroll') === 'scroll') {
       // 分配轨道：选一条最快空闲的
@@ -83,15 +106,19 @@ export function createDanmaku(layer, opts = {}) {
   }
 
   /* --------------------- 发送 --------------------- */
-  async function send(content) {
-    if (!content || !content.trim()) return false;
+  async function send(content, attachments = []) {
+    const text = String(content || '').trim();
+    const pics = attachments || [];
+    // 与后端一致：纯图片弹幕合法
+    if (!text && !pics.length) return false;
     try {
       const r = await api('/api/danmaku', {
         method: 'POST',
         body: {
           scope: state.scope,
           target: targetId,
-          content: content.trim(),
+          content: text,
+          attachments: pics,
           color: state.color,
           position: state.position,
           time: Math.round(getTime() || 0),
@@ -104,6 +131,13 @@ export function createDanmaku(layer, opts = {}) {
       toast(e.message || '弹幕发送失败', 'error');
       return false;
     }
+  }
+
+  /** 探测图片弹幕能力（历史接口会带回开关） */
+  function probeImageCapability() {
+    api(`/api/danmaku?scope=local&target=${encodeURIComponent(targetId)}&limit=1`)
+      .then((d) => { state.imageEnabled = !!d.imageEnabled; if (opts.onCapability) opts.onCapability(state.imageEnabled); })
+      .catch(() => {});
   }
 
   /* --------------------- SSE 订阅 --------------------- */
@@ -167,6 +201,7 @@ export function createDanmaku(layer, opts = {}) {
 
   connect();
   loadHistory();
+  probeImageCapability();
 
   return {
     state,
@@ -234,9 +269,11 @@ export function createDanmakuBar(container, dm) {
   });
 
   const inputRow = h('div', { class: 'dm-input-row' });
+  let picker = null;
   renderInput();
   function renderInput() {
     inputRow.innerHTML = '';
+    picker = null;
     if (!auth.loggedIn) {
       inputRow.appendChild(h('a', { class: 'dm-login', href: '#/login?redirect=' + encodeURIComponent(location.hash), text: '登录后发弹幕' }));
       return;
@@ -244,23 +281,41 @@ export function createDanmakuBar(container, dm) {
     inputEl = h('input', {
       class: 'dm-input',
       maxlength: '60',
-      placeholder: '发条弹幕，和大家一起看…',
+      placeholder: dm.state.imageEnabled ? '发条弹幕或图片…' : '发条弹幕，和大家一起看…',
       onkeydown: (e) => { if (e.key === 'Enter') submit(); },
     });
-    inputRow.append(
-      inputEl,
-      h('button', { class: 'dm-send', text: '发送', onclick: submit })
-    );
+
+    if (dm.state.imageEnabled) {
+      // 一条弹幕最多 1 张图（屏幕上飘多图会糊成一片）
+      picker = imagePicker({ scene: 'danmaku', max: 1, icon: '🖼️' });
+      inputEl.addEventListener('paste', picker.onPaste);
+    }
+
+    inputRow.append(inputEl);
+    if (picker) {
+      inputRow.append(picker.btn);
+      // 预览条单独一行挂在输入行下方，避免把输入框挤扁
+      inputRow.appendChild(h('div', { class: 'dm-pick-strip' }, [picker.strip]));
+    }
+    inputRow.append(h('button', { class: 'dm-send', text: '发送', onclick: submit }));
   }
   async function submit() {
     if (!inputEl) return;
     const v = inputEl.value.trim();
-    if (!v) return;
-    const ok = await dm.send(v);
-    if (ok) inputEl.value = '';
+    const images = picker ? picker.attachments : [];
+    if (!v && !images.length) return;
+    const ok = await dm.send(v, images);
+    if (ok) {
+      inputEl.value = '';
+      if (picker) picker.clear();
+    }
   }
 
   container.innerHTML = '';
   container.append(toggle, scopeSel, posSel, colorDots, inputRow);
-  return { refresh: renderInput, input: () => inputEl };
+  return {
+    refresh: renderInput,
+    input: () => inputEl,
+    get pickerStrip() { return picker ? picker.strip : null; },
+  };
 }

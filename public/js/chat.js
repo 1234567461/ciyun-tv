@@ -5,6 +5,7 @@
 
 import { h, api, toast } from './util.js';
 import { auth, avatarEl } from './auth.js';
+import { imagePicker, imageGrid, imgViews } from './media.js';
 
 const EMOJIS = ['😂', '😍', '🔥', '👍', '😱', '🤣', '😭', '🎉', '👏', '🤔', '💯', '🙌', '😴', '🤯', '👀', '❤️'];
 
@@ -15,7 +16,7 @@ const EMOJIS = ['😂', '😍', '🔥', '👍', '😱', '🤣', '😭', '🎉', 
  */
 export function mountChat(host, opts) {
   const { room, title = '同屏聊天室', subtitle = '' } = opts;
-  const state = { online: 0, unsub: null, es: null, sending: false, lastSender: null };
+  const state = { online: 0, unsub: null, es: null, sending: false, lastSender: null, imageEnabled: false, maxImages: 9 };
 
   host.innerHTML = '';
   host.className = 'chat-wrap';
@@ -39,6 +40,7 @@ export function mountChat(host, opts) {
 
   /* ------------------------ 输入区 ------------------------ */
   let inputEl = null;
+  let picker = null;   // 图片选择器（随能力开关创建/销毁）
   const inputRow = h('div', { class: 'chat-input-row' });
   box.appendChild(inputRow);
 
@@ -51,6 +53,7 @@ export function mountChat(host, opts) {
   renderInput();
   renderEmpty();
   connect();
+  probeImageCapability();
 
   /* ------------------------ 逻辑 ------------------------ */
   function renderEmpty() {
@@ -67,6 +70,7 @@ export function mountChat(host, opts) {
   function renderInput() {
     inputRow.innerHTML = '';
     emojiRow.style.display = 'flex';
+    picker = null;
 
     if (!auth.loggedIn) {
       inputRow.appendChild(
@@ -80,7 +84,9 @@ export function mountChat(host, opts) {
 
     inputEl = h('textarea', {
       class: 'cm-textarea',
-      placeholder: '说点什么…（Enter 发送，Shift+Enter 换行）',
+      placeholder: state.imageEnabled
+        ? '说点什么…（Enter 发送，Shift+Enter 换行，可粘贴图片）'
+        : '说点什么…（Enter 发送，Shift+Enter 换行）',
       maxlength: '200',
       rows: '1',
       onkeydown: (e) => {
@@ -88,24 +94,39 @@ export function mountChat(host, opts) {
       },
     });
 
+    if (state.imageEnabled) {
+      picker = imagePicker({ scene: 'chat', max: state.maxImages, icon: '🖼️' });
+      inputEl.addEventListener('paste', picker.onPaste);
+    }
+
     const sendBtn = h('button', { class: 'btn btn-primary chat-send', text: '发送', onclick: () => send() });
 
-    inputRow.append(
-      h('div', { class: 'input-wrap', style: { padding: '8px 14px' } }, [inputEl]),
-      sendBtn
-    );
+    const wrap = h('div', { class: 'input-wrap', style: { padding: '8px 14px' } }, [
+      inputEl,
+      picker ? picker.strip : null,
+    ]);
+    if (picker) picker.bindDrop(wrap);
+
+    const tools = picker
+      ? h('div', { class: 'chat-input-tools' }, [picker.btn])
+      : null;
+
+    inputRow.append(wrap, tools, sendBtn);
   }
 
   async function send() {
     if (!inputEl) return;
     const content = inputEl.value.trim();
-    if (!content) return;
+    const images = picker ? picker.attachments : [];
+    // 与后端一致：纯图片消息可以只发图
+    if (!content && !images.length) return;
     if (state.sending) return;
     state.sending = true;
     try {
-      await api('/api/chat/send', { method: 'POST', body: { room, content } });
+      await api('/api/chat/send', { method: 'POST', body: { room, content, attachments: images } });
       inputEl.value = '';
       inputEl.style.height = 'auto';
+      if (picker) picker.clear();
     } catch (e) {
       toast(e.message || '发送失败', 'error');
     } finally {
@@ -123,6 +144,9 @@ export function mountChat(host, opts) {
     const showMeta = prev !== m.account;
     state.lastSender = m.account;
 
+    // SSE 推的是原始 attachments，历史接口给的是 images —— 两种都接受
+    const imgs = (m.images && m.images.length) ? imgViews(m.images) : imgViews(m.attachments);
+
     const node = h('div', { class: 'chat-msg' + (isSelf ? ' self' : '') }, [
       avatarEl({ nickname: m.nickname, avatar: m.avatar }, 'sm'),
       h('div', { class: 'chat-msg-body' }, [
@@ -132,7 +156,10 @@ export function mountChat(host, opts) {
               h('span', { text: fmtTime(m.ts) }),
             ])
           : null,
-        h('div', { class: 'cm-bubble', text: m.content }),
+        h('div', { class: 'cm-bubble' + (imgs.length && !m.content ? ' only-img' : '') }, [
+          m.content ? h('span', { text: m.content }) : null,
+          imgs.length ? imageGrid(imgs.length === 1 ? imgs : imgs, { size: 'sm' }) : null,
+        ]),
       ]),
     ]);
     if (!animate) node.style.animation = 'none';
@@ -156,6 +183,16 @@ export function mountChat(host, opts) {
       .then((d) => {
         state.online = d.online || 0;
         onlineNum.textContent = state.online;
+
+        // 服务端能力开关：开启后重建输入区，把「发图」按钮挂上去
+        const canImg = d.imageEnabled !== false;
+        if (canImg !== state.imageEnabled) {
+          state.imageEnabled = canImg;
+          if (auth.loggedIn) renderInput();
+        } else {
+          state.imageEnabled = canImg;
+        }
+
         if (d.list && d.list.length) {
           body.innerHTML = '';
           d.list.forEach((m) => appendMsg(m, false));
@@ -197,6 +234,17 @@ export function mountChat(host, opts) {
         if (d.list && d.list.length) since = d.list[d.list.length - 1].ts;
       } catch {}
     }, 4000);
+  }
+
+  /** 挂载后拉一次能力开关：SSE 不承载站点配置，得单独问一次 */
+  function probeImageCapability() {
+    if (!auth.loggedIn) return;
+    api(`/api/chat/history?room=${encodeURIComponent(room)}&limit=1`)
+      .then((d) => {
+        const canImg = d.imageEnabled !== false;
+        if (canImg !== state.imageEnabled) { state.imageEnabled = canImg; renderInput(); }
+      })
+      .catch(() => {});
   }
 
   /** 销毁（页面切换时调用） */

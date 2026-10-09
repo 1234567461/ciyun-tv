@@ -609,7 +609,7 @@
   .sh-sort-tab { padding: 5px 9px; font-size: 12.5px; }
 }
 
-.sh-stage { flex: 1; position: relative; overflow: hidden; }
+.sh-stage { flex: 1; position: relative; overflow: hidden; z-index: 1; }
 .sh-card {
   position: absolute; inset: 0;
   display: none; align-items: center; justify-content: center;

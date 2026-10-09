@@ -4,6 +4,7 @@
 
 import { h, api, go, goReplace, toast, esc } from './util.js';
 import { auth, avatarEl } from './auth.js';
+import { imagePicker, imageGrid, imgViews } from './media.js';
 
 /** 相对时间 */
 function relTime(ts) {
@@ -42,9 +43,32 @@ function miniAvatar(user, online) {
 }
 
 /**
- * 消息气泡渲染：
- *  - 「🎬 视频分享｜标题\n链接」→ 分享卡片（点击直达）
- *  - 普通文本里的链接（http… 或 #/…）→ 自动可点
+ * 把一条消息渲染成气泡节点。
+ *  - 分享卡片（🎬 视频分享｜标题\n链接）→ 卡片
+ *  - 图片附件 → 九宫格（点击开灯箱）
+ *  - 文字里的链接 → 可点
+ * 单独抽出来是因为「历史消息」和「刚发出的消息」都要用，
+ * 分开写迟早两边渲染不一致（以前分享卡片就踩过这个坑）。
+ */
+function msgNode(m, mine) {
+  const imgs = (m.images && m.images.length) ? imgViews(m.images) : imgViews(m.attachments);
+  const text = String(m.text || '');
+  const hasCard = /^🎬\s*视频分享｜/.test(text);
+
+  const body = [];
+  if (text && !hasCard) body.push(bubbleText(text, imgs.length > 0));
+  if (hasCard) body.push(bubbleEl(text));
+  if (imgs.length) body.push(imageGrid(imgs, { size: 'sm' }));
+
+  return h('div', { class: 'soc-msg' + (mine ? ' mine' : '') }, [
+    ...body,
+    h('div', { class: 'mt', text: clockTime(m.at) }),
+  ]);
+}
+
+/**
+ * 消息气泡渲染（纯文本部分）：
+ *  普通文本里的链接（http… 或 #/…）自动可点
  */
 function bubbleEl(text) {
   const raw = String(text || '');
@@ -60,11 +84,16 @@ function bubbleEl(text) {
       ]),
     ]);
   }
+  return bubbleText(raw, false);
+}
 
-  // ② 普通消息：拆分 URL 让其可点
-  const parts = raw.split(/(https?:\/\/[^\s]+|(?<=\s|^)#\/[^\s]+)/g);
-  if (parts.length === 1) return h('div', { class: 'bubble', text: raw });
-  return h('div', { class: 'bubble' }, parts.map((p) => {
+/** 纯文字气泡（带链接识别） */
+function bubbleText(raw, hasImages) {
+  const s = String(raw || '');
+  if (!s) return null;
+  const parts = s.split(/(https?:\/\/[^\s]+|(?<=\s|^)#\/[^\s]+)/g);
+  if (parts.length === 1) return h('div', { class: 'bubble' + (hasImages ? ' with-img' : ''), text: s });
+  return h('div', { class: 'bubble' + (hasImages ? ' with-img' : '') }, parts.map((p) => {
     if (!p) return null;
     if (/^https?:\/\//.test(p) || /(^|\s)#\//.test(' ' + p)) {
       const hash = normalizeHash(p);
@@ -196,7 +225,10 @@ async function renderMessages(pane, peer) {
           h('span', { class: 'tm', text: last ? relTime(last.at) : '' }),
         ]),
         h('div', { class: 'soc-conv-sub' }, [
-          h('span', { class: 'ms', text: last ? (last.from === auth.user.account ? '我：' : '') + last.text : '暂无消息' }),
+          h('span', { class: 'ms' }, [
+            last && last.images ? h('i', { class: 'soc-img-tag', text: '🖼️' }) : null,
+            h('span', { text: last ? (last.from === auth.user.account ? '我：' : '') + last.text : '暂无消息' }),
+          ]),
           c.unread ? h('em', { class: 'soc-badge', text: String(c.unread) }) : null,
         ]),
       ]),
@@ -244,46 +276,46 @@ async function loadChat(chatBox, acc, onBack) {
   if (!list.length) {
     body.appendChild(h('div', { class: 'soc-hint', text: '还没有消息，打个招呼吧 👋' }));
   }
-  list.forEach((m) => {
-    const mine = m.from === me;
-    body.appendChild(
-      h('div', { class: 'soc-msg' + (mine ? ' mine' : '') }, [
-        bubbleEl(m.text),
-        h('div', { class: 'mt', text: clockTime(m.at) }),
-      ])
-    );
-  });
+  list.forEach((m) => body.appendChild(msgNode(m, m.from === me)));
   chatBox.appendChild(body);
   requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
 
   /* 输入区 */
-  const input = h('input', { class: 'soc-input', placeholder: '输入消息…', maxlength: '2000' });
+  const canImg = data.imageEnabled !== false;
+  const picker = canImg ? imagePicker({ scene: 'message', max: 9, icon: '🖼️' }) : null;
+
+  const input = h('input', {
+    class: 'soc-input',
+    placeholder: canImg ? '输入消息…（可粘贴图片）' : '输入消息…',
+    maxlength: '2000',
+  });
+  if (picker) input.addEventListener('paste', picker.onPaste);
+
   const send = async () => {
     const text = input.value.trim();
-    if (!text) return;
+    const images = picker ? picker.attachments : [];
+    if (!text && !images.length) return;
     input.value = '';
     try {
-      const r = await api('/api/social/messages', { method: 'POST', body: { to: acc, text } });
-      const mine = r.message;
-      body.appendChild(
-        h('div', { class: 'soc-msg mine' }, [
-          bubbleEl(mine.text),
-          h('div', { class: 'mt', text: clockTime(mine.at) }),
-        ])
-      );
+      const r = await api('/api/social/messages', { method: 'POST', body: { to: acc, text, attachments: images } });
+      body.appendChild(msgNode(r.message, true));
       body.scrollTop = body.scrollHeight;
+      if (picker) picker.clear();
     } catch (e) {
       toast(e.message, 'error');
       input.value = text;
     }
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-  chatBox.appendChild(
-    h('div', { class: 'soc-cfoot' }, [
-      input,
-      h('button', { class: 'btn btn-primary btn-sm', text: '发送', onclick: send }),
-    ])
-  );
+
+  const foot = h('div', { class: 'soc-cfoot' }, [input]);
+  if (picker) {
+    foot.appendChild(picker.btn);
+    foot.appendChild(picker.strip);
+    picker.bindDrop(foot);
+  }
+  foot.appendChild(h('button', { class: 'btn btn-primary btn-sm', text: '发送', onclick: send }));
+  chatBox.appendChild(foot);
 }
 
 /* ============================================================

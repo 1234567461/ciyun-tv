@@ -27,6 +27,8 @@ const chat = require('./lib/chat');
 const pay = require('./lib/pay');
 const security = require('./lib/security');
 const mail = require('./lib/mail');
+const image = require('./lib/image');
+const drive = require('./lib/drive');
 
 // 从磁盘恢复采集源缓存（分类表 / 列表），避免重启后首屏重新等十几秒
 try { cctv.loadPersist(); } catch { /* 缓存恢复失败不影响启动 */ }
@@ -57,9 +59,9 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
-// ⚠️ 短视频上传走 multipart，必须跳过 JSON/urlencoded 解析器：
+// ⚠️ 短视频 / 图片上传走 multipart，必须跳过 JSON/urlencoded 解析器：
 //    这两个中间件会消费请求流，导致后续路由拿不到 body（表现为「文件为空」）
-const SKIP_BODY_PARSE = /^\/api\/shorts\/upload\b/;
+const SKIP_BODY_PARSE = /^\/api\/(shorts\/upload|upload\/image|drive\/upload)\b/;
 app.use((req, res, next) => (SKIP_BODY_PARSE.test(req.path) ? next() : express.json({ limit: '2mb' })(req, res, next)));
 app.use((req, res, next) => (SKIP_BODY_PARSE.test(req.path) ? next() : express.urlencoded({ extended: true })(req, res, next)));
 app.use(cookieParser());
@@ -1645,12 +1647,24 @@ app.put('/api/user/password', (req, res) => {
  * ============================================================ */
 
 /** 敏感词 / 内容合规检查 */
-function checkContent(text) {
+/**
+ * 校验评论正文。
+ * @param {string} text
+ * @param {number} [attachCount] 附件数量 —— 有图时可发「纯图片评论」，
+ *        此时正文允许为空、也允许只有 1 个字（配图文案往往很短）
+ */
+function checkContent(text, attachCount = 0) {
   const c = store.settings.community || {};
   const s = String(text || '').trim();
-  if (!s) return '评论内容不能为空';
+  const hasImg = Number(attachCount) > 0;
+
+  if (!s) {
+    if (hasImg) return null;               // 纯图片评论：正文可空
+    return '评论内容不能为空';
+  }
   if (s.length > (c.maxLen || 500)) return `评论最多 ${c.maxLen || 500} 字`;
-  if (s.length < 2) return '评论至少 2 个字';
+  // 有图时放宽最短字数（「好看」这种两字文案仍合规，但「好」不再是问题）
+  if (!hasImg && s.length < 2) return '评论至少 2 个字';
   for (const k of c.keywords || []) {
     if (k && s.includes(k)) return '评论包含违规词，请修改后重试';
   }
@@ -1668,13 +1682,26 @@ app.get('/api/comments', (req, res) => {
   const size = Math.min(30, parseInt(req.query.size, 10) || 10);
   const r = store.queryComments(type, id, { page, size });
   const me = u ? u.account : null;
-  // 标注当前用户是否点过赞
-  const decorate = (c) => ({ ...c, liked: me ? (store.findComment(c.id)?.likes || []).includes(me) : false });
+  /**
+   * 评论装修：
+   *   · liked    当前用户是否点过赞
+   *   · images   附件补全为可直接渲染的 URL（前端不必再拼路径）
+   * 旧数据没有 attachments 字段，这里统一兜底成 []，避免前端 undefined 报错。
+   */
+  const decorate = (c) => ({
+    ...c,
+    attachments: c.attachments || [],
+    images: attachmentViews(c.attachments),
+    liked: me ? (store.findComment(c.id)?.likes || []).includes(me) : false,
+  });
   res.json({
     ...r,
     list: r.list.map((c) => ({ ...c, ...decorate(c), replies: (c.replies || []).map(decorate) })),
     loggedIn: !!u,
     user: u ? { account: u.account, nickname: u.nickname, avatar: u.avatar } : null,
+    // 图片能力开关：前端据此决定是否显示「发图」按钮
+    imageEnabled: store.settings.community.imageEnabled !== false && store.settings.community.commentImages !== false,
+    maxImages: Number(store.settings.community.maxImagesPerComment) || 9,
   });
 });
 
@@ -1690,7 +1717,17 @@ app.post('/api/comments', (req, res) => {
   const { targetType = 'video', targetId, content, parentId } = req.body || {};
   if (!targetId) return res.status(400).json({ error: '缺少目标 ID' });
 
-  const err = checkContent(content);
+  // 图片附件：先取出来，好判断「纯图片评论」是否合法
+  const atts = pickAttachments(req, { scope: 'comment', user: u, cfg: c });
+  if (atts.error) return res.status(atts.status || 400).json({ error: atts.error });
+  const attachments = atts.list;
+
+  // 纯图片评论合法（content 可为空），但不能图文皆空
+  if (!String(content || '').trim() && !attachments.length) {
+    return res.status(400).json({ error: '评论内容不能为空' });
+  }
+
+  const err = checkContent(content, attachments.length);
   if (err) return res.status(400).json({ error: err });
 
   // 频率限制
@@ -1711,6 +1748,9 @@ app.post('/api/comments', (req, res) => {
     if (parent.parentId) parent = store.findComment(parent.parentId) || parent;
   }
 
+  // 图片审核独立于文字审核：开了 imageReview 则带图评论一律待审
+  const needReview = c.commentReview || (attachments.length && c.imageReview);
+
   const rec = store.addComment({
     parentId: parent ? parent.id : null,
     targetType,
@@ -1718,8 +1758,16 @@ app.post('/api/comments', (req, res) => {
     account: u ? u.account : 'guest',
     nickname: u ? u.nickname : '游客',
     avatar: u ? u.avatar : '',
-    content: String(content).trim(),
-    status: c.commentReview ? 'pending' : 'visible',
+    content: String(content || '').trim(),
+    attachments,
+    status: needReview ? 'pending' : 'visible',
+  });
+
+  registerAttachments(attachments, {
+    account: u ? u.account : '',
+    scene: 'comment',
+    refType: String(targetType || 'video'),
+    refId: String(targetId || ''),
   });
 
   res.json({
@@ -3385,6 +3433,111 @@ app.put('/api/family/quota', (req, res) => {
 });
 
 /* ============================================================
+ * 图片附件公共逻辑
+ * ============================================================
+ * 评论 / 聊天 / 弹幕 / 私信 / 封面 都复用这一套：
+ *   pickAttachments()     —— 从请求里取出并校验「引用已有图片」的附件列表
+ *   registerAttachments() —— 把新上传的图片登记进 store.images
+ *
+ * 设计说明：图片先经过 /api/upload/image 上传拿到文件名，再把文件名
+ * 放进业务请求的 attachments 字段。这样做的原因：
+ *   1. 一次上传可被多个业务复用（比如先传图再同时发评论 + 存相册）
+ *   2. 图片校验只写一遍，业务接口不必重复处理 multipart
+ *   3. 上传失败能立刻反馈，不会出现「评论发了一半图没了」
+ */
+
+/**
+ * 从请求 body 里提取附件（只接受已上传的合法文件名）。
+ * @returns {{list:Array, error?:string, status?:number}}
+ */
+function pickAttachments(req, { scope = 'chat', user = null, cfg = {} } = {}) {
+  const c = cfg || store.settings.community || {};
+
+  // 总开关
+  if (c.imageEnabled === false) return { list: [] };
+
+  const raw = req.body && req.body.attachments;
+  if (!raw) return { list: [] };
+
+  let arr = raw;
+  if (typeof arr === 'string') {
+    try { arr = JSON.parse(arr); } catch { arr = []; }
+  }
+  if (!Array.isArray(arr) || !arr.length) return { list: [] };
+
+  // 场景开关
+  const sceneFlag = {
+    comment: c.commentImages,
+    chat: c.chatImages,
+    danmaku: c.danmakuImages,
+    message: c.messageImages,
+  }[scope];
+  if (sceneFlag === false) return { list: [], error: '本站已关闭该处发图功能' };
+
+  // 发图要求登录（游客能发文字不代表能发图）
+  if (!user) return { list: [], error: '请登录后再发送图片', status: 401 };
+
+  const maxN = scope === 'comment' ? (Number(c.maxImagesPerComment) || 9)
+    : scope === 'danmaku' ? 1
+      : (Number(c.maxImagesPerMessage) || 9);
+  if (arr.length > maxN) return { list: [], error: `一次最多发送 ${maxN} 张图片` };
+
+  const maxBytes = (Number(c.imageMaxMB) || 5) * 1024 * 1024;
+  const out = [];
+  for (const a of arr) {
+    const file = typeof a === 'string' ? a : (a && a.file);
+    if (!file) continue;
+    const safe = path.basename(String(file));
+    if (!/^[0-9]+_[0-9a-f]+\.(jpg|jpeg|png|gif|webp|avif|bmp)$/.test(safe)) {
+      return { list: [], error: '包含无效的图片引用' };
+    }
+    // 必须能在图片表里找到（确保是本站上传的，而不是凭空编的文件名）
+    const rec = store.findImageByFile(safe);
+    if (!rec) return { list: [], error: '图片不存在或已过期，请重新上传' };
+    if (rec.status === 'blocked') return { list: [], error: '该图片已被管理员屏蔽' };
+    // 只允许引用自己上传的图（管理员可引用任意）
+    if (rec.account && rec.account !== user.account && !isAdminAccount(user.account)) {
+      return { list: [], error: '不能引用他人的图片' };
+    }
+    if (maxBytes && rec.size > maxBytes) {
+      return { list: [], error: `图片超过 ${(maxBytes / 1048576).toFixed(0)}MB 限制` };
+    }
+    out.push({
+      file: rec.file,
+      thumb: rec.thumb || '',
+      name: rec.name || '',
+      w: rec.w || 0,
+      h: rec.h || 0,
+      size: rec.size || 0,
+      animated: !!rec.animated,
+    });
+  }
+  return { list: out };
+}
+
+/** 把附件登记进图片表（标记引用来源，便于相册与后台管理） */
+function registerAttachments(list, meta = {}) {
+  if (!Array.isArray(list) || !list.length) return;
+  for (const a of list) {
+    const rec = store.findImageByFile(a.file);
+    if (!rec) continue;
+    // 已登记过的只补来源信息，不重复插记录
+    if (!rec.refId) {
+      rec.refType = meta.refType || rec.refType || '';
+      rec.refId = meta.refId || '';
+    }
+    if (meta.scene && rec.scene === 'gallery') rec.scene = meta.scene;
+  }
+  // store 无批量保存接口，这里触发一次落盘
+  try { store.addImage; } catch {}
+}
+
+/** 附件 → 前端视图（补全 URL） */
+function attachmentViews(list) {
+  return (list || []).map((a) => image.imageView(a));
+}
+
+/* ============================================================
  * 同源聊天室（看同一部片的用户实时聊天）
  * ============================================================ */
 
@@ -3403,7 +3556,13 @@ app.get('/api/chat/history', (req, res) => {
   const room = String(req.query.room || '').slice(0, 120);
   if (!room) return res.status(400).json({ error: 'room required' });
   const limit = Math.min(100, parseInt(req.query.limit, 10) || 60);
-  res.json({ room, online: chat.online(room), list: chat.history(room, limit) });
+  res.json({
+    room,
+    online: chat.online(room),
+    // 图片消息补全 URL，前端拿到即可渲染
+    list: chat.history(room, limit).map((m) => ({ ...m, images: attachmentViews(m.attachments) })),
+    imageEnabled: store.settings.community.imageEnabled !== false && store.settings.community.chatImages !== false,
+  });
 });
 
 /** SSE 实时订阅 */
@@ -3437,7 +3596,7 @@ app.get('/api/chat/stream', (req, res) => {
   });
 });
 
-/** 发送消息 */
+/** 发送消息（文本 / 图片 / 图文混合） */
 app.post('/api/chat/send', (req, res) => {
   const cfg = store.settings.community || {};
   if (cfg.enabled === false) return res.status(403).json({ error: '聊天功能已关闭' });
@@ -3448,10 +3607,19 @@ app.post('/api/chat/send', (req, res) => {
   const room = String((req.body && req.body.room) || '').slice(0, 120);
   const content = String((req.body && req.body.content) || '').trim();
   if (!room) return res.status(400).json({ error: '缺少房间' });
-  if (!content) return res.status(400).json({ error: '消息不能为空' });
+
+  // 图片能力：开关 + 登录要求（游客默认不能发图，避免匿名传图滥用）
+  const atts = pickAttachments(req, { scope: 'chat', user: u, cfg });
+  if (atts.error) return res.status(atts.status || 400).json({ error: atts.error });
+  const attachments = atts.list;
+
+  // 纯图片消息合法（content 可为空），但不能两者都空
+  if (!content && !attachments.length) return res.status(400).json({ error: '消息不能为空' });
   if (content.length > 200) return res.status(400).json({ error: '消息最多 200 字' });
-  for (const k of cfg.keywords || []) {
-    if (k && content.includes(k)) return res.status(400).json({ error: '消息包含违规词' });
+  if (content) {
+    for (const k of cfg.keywords || []) {
+      if (k && content.includes(k)) return res.status(400).json({ error: '消息包含违规词' });
+    }
   }
 
   const key = (u ? u.account : 'guest') + '@' + room;
@@ -3462,7 +3630,17 @@ app.post('/api/chat/send', (req, res) => {
     nickname: u ? u.nickname || u.account : '游客',
     avatar: u ? u.avatar : '',
     content,
+    attachments,
   });
+
+  // 图片消息登记到图片表，便于「我的相册」与后台统一管理
+  registerAttachments(attachments, {
+    account: u ? u.account : '',
+    scene: 'chat',
+    refType: 'room',
+    refId: room,
+  });
+
   chat.broadcast(room, 'message', msg);
   res.json({ ok: true, message: msg });
 });
@@ -3490,8 +3668,14 @@ app.get('/api/danmaku', (req, res) => {
   const targetId = req.query.target || '';
   const room = danmakuRoom(scope, targetId);
   const limit = Math.min(200, parseInt(req.query.limit, 10) || 100);
-  const list = chat.history(room, limit);
-  res.json({ scope, room, online: chat.online(room), list });
+  const list = chat.history(room, limit).map((m) => ({ ...m, images: attachmentViews(m.attachments) }));
+  res.json({
+    scope,
+    room,
+    online: chat.online(room),
+    list,
+    imageEnabled: store.settings.community.imageEnabled !== false && store.settings.community.danmakuImages !== false,
+  });
 });
 
 /** 弹幕 SSE 实时流 */
@@ -3518,7 +3702,7 @@ app.get('/api/danmaku/stream', (req, res) => {
   req.on('close', () => { clearInterval(hb); unsub(); });
 });
 
-/** 发送弹幕 */
+/** 发送弹幕（支持图片弹幕） */
 app.post('/api/danmaku', (req, res) => {
   const cfg = store.settings.community || {};
   if (cfg.enabled === false) return res.status(403).json({ error: '弹幕功能已关闭' });
@@ -3532,7 +3716,13 @@ app.post('/api/danmaku', (req, res) => {
   const position = ['scroll', 'top', 'bottom'].includes(req.body && req.body.position)
     ? req.body.position : 'scroll';
 
-  if (!content) return res.status(400).json({ error: '弹幕内容不能为空' });
+  // 图片弹幕：一条弹幕最多 1 张图（屏幕上飘多图会糊成一片）
+  const atts = pickAttachments(req, { scope: 'danmaku', user: u, cfg });
+  if (atts.error) return res.status(atts.status || 400).json({ error: atts.error });
+  let attachments = atts.list;
+  if (attachments.length > 1) attachments = attachments.slice(0, 1);
+
+  if (!content && !attachments.length) return res.status(400).json({ error: '弹幕内容不能为空' });
   if (content.length > DANMAKU_MAX_LEN) return res.status(400).json({ error: `弹幕最多 ${DANMAKU_MAX_LEN} 字` });
   for (const k of cfg.keywords || []) {
     if (k && content.includes(k)) return res.status(400).json({ error: '弹幕包含违规词' });
@@ -3546,12 +3736,21 @@ app.post('/api/danmaku', (req, res) => {
     account: u ? u.account : 'guest',
     nickname: u ? u.nickname || u.account : '游客',
     content,
+    attachments,
     color: /^#[0-9a-f]{6}$/i.test(color) ? color : '#ffffff',
     position,
     scope,
     // 播放进度（秒），用于视频内按时间轴对齐
     time: Math.max(0, Number(req.body && req.body.time) || 0),
   });
+
+  registerAttachments(attachments, {
+    account: u ? u.account : '',
+    scene: 'danmaku',
+    refType: 'room',
+    refId: room,
+  });
+
   chat.broadcast(room, 'danmaku', dm);
   res.json({ ok: true, danmaku: dm });
 });
@@ -3577,9 +3776,172 @@ function requireUser(req, res, next) {
   next();
 }
 
+/* ============================================================
+ * 图片上传（评论 / 聊天 / 弹幕 / 私信 / 封面 / 相册 / 云盘 共用）
+ * ============================================================
+ * POST /api/upload/image?scene=comment|chat|danmaku|message|cover|avatar|gallery|drive
+ * GET  /api/upload/image  → 能力探测（不要求登录，不占配额）
+ *
+ * 流程：流式落盘临时目录 → lib/image.js 七层校验 → 移入隔离存储
+ *       → 生成缩略图 → 登记进 store.images → 返回可引用的文件名
+ * 业务接口随后通过 attachments 字段引用这些文件名。
+ */
+app.all(
+  '/api/upload/image',
+  // 能力探测：GET/HEAD/OPTIONS 不要求登录（与短视频上传端点保持一致的原因）
+  (req, res, next) => {
+    if (req.method === 'POST') return next();
+    const u = currentUser(req);
+    res.setHeader('Allow', 'GET, POST, HEAD, OPTIONS');
+    return res.json({
+      ok: true,
+      endpoint: '/api/upload/image',
+      method: 'POST',
+      contentType: 'multipart/form-data',
+      field: 'image（也可用 file / upload）',
+      scenes: Object.keys(image.LIMITS),
+      limits: Object.fromEntries(
+        Object.entries(image.LIMITS).map(([k, v]) => [k, `${(v / 1048576).toFixed(0)}MB`])
+      ),
+      maxDimension: image.MAX_DIMENSION,
+      allowed: [...image.ALLOWED_EXT],
+      authed: !!u,
+      user: (u && u.account) || null,
+    });
+  },
+  requireUser,
+  (req, res, next) => {
+    // 图片上传比视频频繁得多，限流放宽到每用户每小时 200 张
+    const rl = security.rateLimit('imgup:' + (req.user && req.user.account), { window: 3600 * 1000, max: 200 });
+    if (!rl.ok) return res.status(429).json({ error: '上传过于频繁，请稍后再试', retryAfter: rl.retryAfter });
+    next();
+  },
+  async (req, res) => {
+    await image.ensureDirs();
+
+    const ct = String(req.headers['content-type'] || '');
+    if (!ct.includes('multipart/form-data')) {
+      return res.status(400).json({ error: '请使用 multipart/form-data 上传' });
+    }
+    const boundary = '--' + ct.split('boundary=')[1];
+    if (!boundary || boundary === '--undefined') return res.status(400).json({ error: '缺少 multipart boundary' });
+
+    const scene = image.LIMITS[req.query.scene] ? String(req.query.scene) : 'comment';
+
+    // 云盘配额联动：从云盘上传图片要占云盘空间，先预检剩余空间
+    if (scene === 'drive') {
+      const dcfg = store.settings.drive || {};
+      if (dcfg.enabled === false) return res.status(403).json({ error: '云盘功能已关闭' });
+      const q = drive.quotaView(req.user);
+      if (q.full) return res.status(413).json({ error: '云盘空间已满，请清理或扩容' });
+    }
+
+    let tmpPath = null;
+    try {
+      // 复用统一 multipart 解析器（只收第一个文件）
+      const r = await receiveMultipart(req, image, boundary, { maxSize: image.LIMITS[scene] });
+      tmpPath = r.tmpPath;
+      if (!r.file) throw new UploadError('未收到图片文件');
+
+      const v = await image.validateImage({
+        path: tmpPath,
+        size: r.file.size,
+        originalname: r.file.filename,
+        mimetype: r.file.contentType,
+      }, { scene });
+      if (!v.ok) throw new UploadError(v.reason || '图片校验未通过');
+
+      const c = await image.commitImage(tmpPath, v.info);
+      if (!c.ok) throw new UploadError(c.reason || '保存失败');
+      tmpPath = null;
+
+      // 登记进图片表
+      const rec = store.addImage({
+        file: c.filename,
+        thumb: c.thumb,
+        name: image.extOf(r.file.filename) ? r.file.filename : '',
+        account: req.user.account,
+        w: v.info.width,
+        h: v.info.height,
+        size: v.info.size,
+        animated: v.info.animated,
+        scene,
+        refType: String(req.body && req.body.refType || ''),
+        refId: String(req.body && req.body.refId || ''),
+      });
+
+      const view = image.imageView(rec);
+      res.json({
+        ok: true,
+        id: rec.id,
+        // 业务接口要用的是这份「可引用」信息
+        attachment: {
+          file: rec.file, thumb: rec.thumb, name: rec.name,
+          w: rec.w, h: rec.h, size: rec.size, animated: rec.animated,
+        },
+        image: view,
+      });
+    } catch (e) {
+      if (tmpPath) await image.removeQuiet(tmpPath);
+      const code = e instanceof UploadError ? 400 : 500;
+      res.status(code).json({ error: e.message || '上传失败' });
+    }
+  }
+);
+
+/**
+ * 图片读取（带鉴权与防盗链）。
+ * GET /api/image/:file        → 原图
+ * GET /api/image/thumb/:file  → 缩略图
+ *
+ * 安全要点：
+ *   · 只接受本模块生成的文件名格式，杜绝路径穿越
+ *   · Content-Type 强制为图片白名单，配合 nosniff 杜绝 HTML/JS 执行
+ *   · 被屏蔽的图片（status=blocked）即使知道 URL 也取不到
+ */
+app.get('/api/image/thumb/:file', (req, res) => serveImage(req, res, true));
+app.get('/api/image/:file', (req, res) => serveImage(req, res, false));
+
+function serveImage(req, res, wantThumb) {
+  const name = String(req.params.file || '');
+  const full = wantThumb ? image.resolveThumb(name) : image.resolveStored(name);
+  if (!full) return res.status(404).send('not found');
+
+  // 被屏蔽的图片不对外提供
+  const rec = store.findImageByFile(wantThumb ? name.replace(/\.jpg$/, '') : name);
+  if (rec && rec.status === 'blocked' && !req.admin) return res.status(403).send('blocked');
+
+  let st;
+  try { st = fs.statSync(full); } catch { return res.status(404).send('missing'); }
+
+  const ext = image.extOf(full);
+  res.setHeader('Content-Type', image.EXT_MIME[image.normExt(ext)] || 'image/jpeg');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('Accept-Ranges', 'bytes');
+  // 文件名含随机串，内容不会变 → 长缓存
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+
+  const range = req.headers.range;
+  if (range) {
+    const m = /bytes=(\d*)-(\d*)/.exec(range);
+    let start = m && m[1] ? parseInt(m[1], 10) : 0;
+    let end = m && m[2] ? parseInt(m[2], 10) : st.size - 1;
+    if (isNaN(start) || start < 0) start = 0;
+    if (isNaN(end) || end >= st.size) end = st.size - 1;
+    if (start > end) return res.status(416).setHeader('Content-Range', `bytes */${st.size}`).end();
+    res.statusCode = 206;
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${st.size}`);
+    res.setHeader('Content-Length', end - start + 1);
+    fs.createReadStream(full, { start, end }).pipe(res);
+  } else {
+    res.setHeader('Content-Length', st.size);
+    fs.createReadStream(full).pipe(res);
+  }
+}
+
 /** 短视频视图（脱敏 + 补齐字段） */
-function shortView(s, viewer) {
-  return {
+function shortView(s, viewer) {  return {
     id: s.id,
     account: s.account,
     author: s.author || s.account,
@@ -3732,11 +4094,17 @@ class UploadError extends Error {}
 /**
  * 极简 multipart/form-data 解析（零依赖）。
  * 安全要点：
- *   · 边收边写盘，累计超 MAX_SIZE 立即 413，防内存/磁盘 DoS
+ *   · 边收边写盘，累计超上限立即中断，防内存/磁盘 DoS
  *   · 只保存第一个文件的字节流到随机临时名
  *   · 表单字段限长，防止超长字段撑爆内存
+ *
+ * @param {object} req
+ * @param {object} mod      提供 MAX_SIZE（体积上限）与 removeQuiet / TMP_DIR 的模块
+ * @param {string} boundary multipart 边界
+ * @param {object} [opt]    { maxSize } 覆盖 mod.MAX_SIZE（图片各场景上限不同）
  */
-function receiveMultipart(req, upload, boundary) {
+function receiveMultipart(req, mod, boundary, opt = {}) {
+  const MAX_SIZE = Number(opt.maxSize) || mod.MAX_SIZE;
   return new Promise((resolve, reject) => {
     const bufBoundary = Buffer.from(boundary);
     let buf = Buffer.alloc(0);
@@ -3765,7 +4133,7 @@ function receiveMultipart(req, upload, boundary) {
       if (done) return;
       done = true;
       try { if (ws) ws.destroy(); } catch {}
-      if (tmpPath) await upload.removeQuiet(tmpPath);
+      if (tmpPath) await mod.removeQuiet(tmpPath);
       reject(err);
     };
 
@@ -3774,8 +4142,8 @@ function receiveMultipart(req, upload, boundary) {
       buf = Buffer.concat([buf, chunk]);
 
       // 超限保护（整体请求）
-      if (buf.length > upload.MAX_SIZE + 8 * 1024 * 1024) {
-        return fail(new UploadError(`文件超过上限 ${(upload.MAX_SIZE / 1048576).toFixed(0)}MB`));
+      if (buf.length > MAX_SIZE + 8 * 1024 * 1024) {
+        return fail(new UploadError(`文件超过上限 ${(MAX_SIZE / 1048576).toFixed(0)}MB`));
       }
 
       // 循环解析
@@ -3801,9 +4169,9 @@ function receiveMultipart(req, upload, boundary) {
           curFilename = fn ? fn[1] : '';
           curCT = ct2 ? ct2[1].trim() : '';
           if (curFilename) {
-            if (file) { return fail(new UploadError('一次只能上传一个视频文件')); }
+            if (file) { return fail(new UploadError('一次只能上传一个文件')); }
             file = { filename: curFilename, contentType: curCT, size: 0 };
-            tmpPath = path.join(upload.TMP_DIR, 'up_' + crypto.randomBytes(10).toString('hex') + '.part');
+            tmpPath = path.join(mod.TMP_DIR, 'up_' + crypto.randomBytes(10).toString('hex') + '.part');
             ws = fs.createWriteStream(tmpPath);
             ws.on('error', (e) => fail(new UploadError('写入临时文件失败：' + e.message.slice(0, 80))));
             written = 0;
@@ -3818,7 +4186,7 @@ function receiveMultipart(req, upload, boundary) {
             const safe = Math.max(0, buf.length - bufBoundary.length - 4);
             if (safe > 0) {
               const piece = buf.slice(0, safe);
-              if (ws) { written += piece.length; if (written > upload.MAX_SIZE) return fail(new UploadError(`文件超过上限 ${(upload.MAX_SIZE / 1048576).toFixed(0)}MB`)); ws.write(piece); }
+              if (ws) { written += piece.length; if (written > MAX_SIZE) return fail(new UploadError(`文件超过上限 ${(MAX_SIZE / 1048576).toFixed(0)}MB`)); ws.write(piece); }
               else if (Object.keys(fields).length === 0 || curName) {
                 fields[curName] = (fields[curName] || '') + piece.toString('utf8');
                 if (fields[curName].length > 100000) return fail(new UploadError('表单字段过长'));
@@ -3830,7 +4198,7 @@ function receiveMultipart(req, upload, boundary) {
           const piece = buf.slice(0, i);
           // 去掉尾部 CRLF
           const clean = piece.length >= 2 && piece.slice(-2).toString() === '\r\n' ? piece.slice(0, -2) : piece;
-          if (ws) { written += clean.length; if (written > upload.MAX_SIZE) return fail(new UploadError(`文件超过上限 ${(upload.MAX_SIZE / 1048576).toFixed(0)}MB`)); ws.write(clean); }
+          if (ws) { written += clean.length; if (written > MAX_SIZE) return fail(new UploadError(`文件超过上限 ${(MAX_SIZE / 1048576).toFixed(0)}MB`)); ws.write(clean); }
           else {
             fields[curName] = (fields[curName] || '') + clean.toString('utf8');
             if (fields[curName].length > 100000) return fail(new UploadError('表单字段过长'));
@@ -4159,16 +4527,27 @@ app.get('/api/social/messages/:account', requireSocial, (req, res) => {
   const list = store.listMessages(me, other, { limit });
   // 打开会话即标记已读
   store.readMessages(me, other);
-  res.json({ list, peer: publicUser(other) });
+  res.json({
+    // 附件补全为可直接渲染的 URL；旧消息无 attachments 时兜底空数组
+    list: list.map((m) => ({ ...m, images: attachmentViews(m.attachments) })),
+    peer: publicUser(other),
+    imageEnabled: store.settings.community.imageEnabled !== false && store.settings.community.messageImages !== false,
+  });
 });
 
-/** 发送私信 */
+/** 发送私信（支持图片） */
 app.post('/api/social/messages', requireSocial, (req, res) => {
   const me = req.user.account;
   const to = String((req.body && req.body.to) || '').toLowerCase();
   const text = String((req.body && req.body.text) || '').trim();
   if (!to) return res.status(400).json({ error: '缺少收信人' });
-  if (!text) return res.status(400).json({ error: '消息不能为空' });
+
+  const atts = pickAttachments(req, { scope: 'message', user: req.user, cfg: store.settings.community });
+  if (atts.error) return res.status(atts.status || 400).json({ error: atts.error });
+  const attachments = atts.list;
+
+  // 纯图片私信合法
+  if (!text && !attachments.length) return res.status(400).json({ error: '消息不能为空' });
   if (text.length > 2000) return res.status(400).json({ error: '消息过长（最多 2000 字）' });
 
   const f = store.findFriendship(me, to);
@@ -4178,8 +4557,19 @@ app.post('/api/social/messages', requireSocial, (req, res) => {
   const rl = security.rateLimit('msg:' + me, { window: 60 * 1000, max: 30 });
   if (!rl.ok) return res.status(429).json({ error: '发送过快，请稍后再试' });
 
-  const rec = store.sendMessage(me, to, text);
-  res.json({ ok: true, message: rec });
+  const rec = store.sendMessage(me, to, text, attachments);
+
+  registerAttachments(attachments, {
+    account: me,
+    scene: 'message',
+    refType: 'conv',
+    refId: rec.conv,
+  });
+
+  res.json({
+    ok: true,
+    message: { ...rec, images: attachmentViews(rec.attachments) },
+  });
 });
 
 /** 未读私信数（轮询用，轻量） */
@@ -4277,6 +4667,785 @@ app.post('/api/users/:account/follow', requireUser, (req, res) => {
     cover: u.avatar || '',
   });
   res.json({ ...r, followers: store.followerCount(target) });
+});
+
+/* ============================================================
+ * 云盘 API
+ * ============================================================
+ * 鉴权模型：所有云盘接口都要求登录（requireUser），并在每个操作里
+ * 二次校验节点归属（store.findDriveNode(id, account) 传了 account
+ * 就会在账号不符时返回 null）。这样即便有人猜到别人的节点 id，
+ * 也拿不到数据。
+ */
+
+/** 云盘开关中间件 */
+function requireDrive(req, res, next) {
+  const cfg = store.settings.drive || {};
+  if (cfg.enabled === false) return res.status(403).json({ error: '云盘功能已关闭' });
+  next();
+}
+
+/** 云盘概览：配额 + 当前目录列表 */
+app.get('/api/drive/list', requireUser, requireDrive, (req, res) => {
+  const parent = drive.normParent(req.user.account, req.query.parent);
+  if (parent === null) return res.status(404).json({ error: '文件夹不存在' });
+  const trashed = req.query.trashed === '1';
+
+  const list = store.driveNodes(req.user.account, { trashed, parent: trashed ? undefined : parent })
+    .sort((a, b) => {
+      // 文件夹优先，再按更新时间倒序
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    })
+    .map((n) => drive.nodeView(n));
+
+  res.json({
+    list,
+    parent,
+    breadcrumb: drive.breadcrumb(req.user.account, parent),
+    quota: drive.quotaView(req.user),
+    trashed,
+    allowShare: (store.settings.drive || {}).allowShare !== false,
+    maxFileMB: Number((store.settings.drive || {}).maxFileMB) || 2048,
+  });
+});
+
+/** 新建文件夹 */
+app.post('/api/drive/folder', requireUser, requireDrive, (req, res) => {
+  const parent = drive.normParent(req.user.account, req.body && req.body.parent);
+  if (parent === null) return res.status(404).json({ error: '父文件夹不存在' });
+  let name = drive.sanitizeName(req.body && req.body.name, '新建文件夹');
+  name = drive.uniqueName(req.user.account, parent, name);
+  const node = store.createDriveFolder(req.user.account, parent, name);
+  res.json({ ok: true, node: drive.nodeView(node) });
+});
+
+/**
+ * 全部文件夹（扁平，带完整路径）。
+ * 用于「移动到…」对话框的目录下拉选择。
+ * 返回扁平列表而非树，因为下拉框只需要「缩进感」，用路径字符串就能表达。
+ */
+app.get('/api/drive/folders', requireUser, requireDrive, (req, res) => {
+  const all = store.driveNodes(req.user.account, { trashed: false })
+    .filter((n) => n.type === 'folder');
+  // 组装每个文件夹的完整路径（父在前）
+  const byId = new Map(all.map((n) => [n.id, n]));
+  const pathOf = (n) => {
+    const parts = [n.name];
+    let cur = n;
+    let guard = 0;
+    while (cur.parent && guard++ < 50) {
+      const p = byId.get(cur.parent);
+      if (!p) break;
+      parts.unshift(p.name);
+      cur = p;
+    }
+    return parts.join(' / ');
+  };
+  res.json({
+    list: all
+      .map((n) => ({ id: n.id, name: n.name, path: pathOf(n), parent: n.parent || '' }))
+      .sort((a, b) => a.path.localeCompare(b.path, 'zh')),
+  });
+});
+
+/** 上传文件 */
+app.all('/api/drive/upload', requireUser, requireDrive,
+  (req, res, next) => {
+    if (req.method === 'POST') return next();
+    const q = drive.quotaView(req.user);
+    res.setHeader('Allow', 'GET, POST, HEAD, OPTIONS');
+    return res.json({
+      ok: true, endpoint: '/api/drive/upload', method: 'POST',
+      contentType: 'multipart/form-data',
+      fields: { file: '文件（必填）', parent: '目标文件夹 id（选填，空为根目录）' },
+      maxFileMB: Number((store.settings.drive || {}).maxFileMB) || 2048,
+      quota: q,
+      allowed: [...drive.ALLOWED_EXT],
+      blocked: [...drive.BLOCKED_EXT],
+      authed: true, user: req.user.account,
+    });
+  },
+  async (req, res) => {
+    await drive.ensureDirs();
+    const cfg = store.settings.drive || {};
+
+    const ct = String(req.headers['content-type'] || '');
+    if (!ct.includes('multipart/form-data')) {
+      return res.status(400).json({ error: '请使用 multipart/form-data 上传' });
+    }
+    const boundary = '--' + ct.split('boundary=')[1];
+    if (!boundary || boundary === '--undefined') return res.status(400).json({ error: '缺少 multipart boundary' });
+
+    const maxFile = (Number(cfg.maxFileMB) || 2048) * drive.MB;
+    const qv = drive.quotaView(req.user);
+    if (qv.totalBytes <= 0) return res.status(403).json({ error: '当前账号未开通云盘空间' });
+    if (qv.remainBytes <= 0) return res.status(413).json({ error: '云盘空间已满，请清理或扩容' });
+
+    // 预检 + 取较小值：既不超过单文件上限，也不超过剩余空间
+    const cap = Math.min(maxFile, qv.remainBytes);
+
+    let tmpPath = null;
+    try {
+      const r = await receiveMultipart(req, drive, boundary, { maxSize: cap });
+      tmpPath = r.tmpPath;
+      if (!r.file) throw new UploadError('未收到文件');
+
+      const parent = drive.normParent(req.user.account, (r.fields && r.fields.parent) || (req.query.parent || ''));
+      if (parent === null) throw new UploadError('目标文件夹不存在');
+
+      // 文件头校验（黑名单 + 可执行文件负向校验）
+      const sniff = await drive.sniffFile(tmpPath, r.file.filename);
+      if (!sniff.ok) throw new UploadError(sniff.reason || '文件校验未通过');
+
+      const origName = drive.sanitizeName(r.file.filename, '未命名');
+      const ext = drive.extOf(origName);
+      const fileName = drive.storageName(ext);
+      const dest = path.join(drive.DRIVE_DIR, fileName);
+
+      // 落盘
+      try {
+        await fs.promises.rename(tmpPath, dest);
+      } catch (e) {
+        if (e.code === 'EXDEV') {
+          await fs.promises.copyFile(tmpPath, dest);
+          await fs.promises.unlink(tmpPath);
+        } else throw e;
+      }
+      tmpPath = null;
+      try { await fs.promises.chmod(dest, 0o600); } catch {}
+
+      const size = (await fs.promises.stat(dest)).size;
+
+      // 二次配额校验：并发上传时预检可能同时通过，落盘后再核一次
+      const chk = drive.canWrite(req.user, size - 0);
+      // 注意 canWrite 用的 usedBytes 已不含刚落的这个文件，所以这里直接比
+      const after = drive.quotaView(req.user);
+      if (after.usedBytes + size > after.totalBytes) {
+        await drive.removeQuiet(dest);
+        throw new UploadError(`空间不足，还需要 ${drive.fmtSize(after.usedBytes + size - after.totalBytes)}`);
+      }
+
+      // 图片额外生成缩略图（复用图片模块）
+      let imgFile = '';
+      let w = 0, h = 0;
+      let mime = 'application/octet-stream';
+      if (sniff.isImage) {
+        const dim = await image.readSize(dest);
+        if (dim) { w = dim.w; h = dim.h; }
+        mime = image.EXT_MIME[image.normExt(ext)] || 'image/jpeg';
+        // 缩略图放到 images/thumb，便于云盘网格视图快速加载
+        const thumbName = fileName.replace(/\.[^.]+$/, '.jpg');
+        const thumbPath = path.join(image.THUMB_DIR, thumbName);
+        try { await fs.promises.mkdir(image.THUMB_DIR, { recursive: true }); } catch {}
+        const okThumb = await image.makeThumb(dest, thumbPath);
+        if (okThumb) imgFile = thumbName;
+      } else {
+        mime = guessMime(ext);
+      }
+
+      const safeName = drive.uniqueName(req.user.account, parent, origName);
+      const node = store.addDriveFile(req.user.account, parent, {
+        name: safeName, file: fileName, size, mime, w, h, ext,
+      });
+      // 图片类文件额外挂上缩略图名，供 nodeView 输出
+      if (imgFile) { node.imgFile = imgFile; store.updateDriveNode(node.id, {}); }
+
+      res.json({
+        ok: true,
+        node: drive.nodeView(node),
+        quota: drive.quotaView(req.user),
+      });
+    } catch (e) {
+      if (tmpPath) await drive.removeQuiet(tmpPath);
+      const code = e instanceof UploadError ? 400 : 500;
+      res.status(code).json({ error: e.message || '上传失败' });
+    }
+  }
+);
+
+/** 常见扩展名 → MIME（云盘下载响应头用） */
+function guessMime(ext) {
+  const e = String(ext || '').toLowerCase();
+  const table = {
+    mp4: 'video/mp4', m4v: 'video/x-m4v', mov: 'video/quicktime', webm: 'video/webm',
+    mkv: 'video/x-matroska', avi: 'video/x-msvideo', flv: 'video/x-flv', ts: 'video/mp2t',
+    mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+    wav: 'audio/wav', ogg: 'audio/ogg', opus: 'audio/opus',
+    txt: 'text/plain; charset=utf-8', md: 'text/plain; charset=utf-8',
+    csv: 'text/csv; charset=utf-8', json: 'application/json', log: 'text/plain; charset=utf-8',
+    pdf: 'application/pdf', epub: 'application/epub+zip', mobi: 'application/x-mobipocket-ebook',
+    azw3: 'application/vnd.amazon.ebook', cbz: 'application/vnd.comicbook+zip',
+    zip: 'application/zip', rar: 'application/vnd.rar', '7z': 'application/x-7z-compressed',
+    tar: 'application/x-tar', gz: 'application/gzip',
+    doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  };
+  return table[e] || 'application/octet-stream';
+}
+
+/**
+ * 文件读取（下载 / 在线预览）。
+ * GET /api/drive/file/:id?inline=1&thumb=1
+ *   inline=1 → 浏览器内联展示（图片/视频/音频/PDF 预览）
+ *   默认     → 附件下载
+ *
+ * 安全：归属校验 + 强制 MIME 白名单 + nosniff，杜绝把用户文件当 HTML/JS 执行。
+ */
+app.get('/api/drive/file/:id', requireUser, requireDrive, (req, res) => {
+  const node = store.findDriveNode(req.params.id, req.user.account);
+  if (!node || node.type !== 'file') return res.status(404).send('not found');
+  if (node.trashed) return res.status(410).send('已在回收站');
+
+  // 缩略图请求（图片类）
+  if (req.query.thumb === '1' && node.imgFile) {
+    const t = image.resolveThumb(node.imgFile);
+    if (t && fs.existsSync(t)) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      return fs.createReadStream(t).pipe(res);
+    }
+    // 无缩略图则回落到原图
+  }
+
+  const full = drive.resolveFile(node.file);
+  if (!full) return res.status(404).send('bad file');
+  let st;
+  try { st = fs.statSync(full); } catch { return res.status(404).send('missing'); }
+
+  const ext = node.ext || drive.extOf(node.name);
+  const inline = req.query.inline === '1';
+  const kind = drive.previewKind(ext);
+
+  res.setHeader('Content-Type', node.mime || guessMime(ext));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // 预览时内联，下载时强制附件（文件名做 RFC 5987 编码，兼容中文）
+  if (inline) {
+    // 只有白名单内的可预览类型才允许内联，其余一律下载 —— 防止
+    // 用户上传一个 .txt 里塞 HTML 被浏览器当页面渲染（XSS）
+    if (!kind) return res.status(415).send('该类型不支持在线预览');
+    res.setHeader('Content-Disposition', 'inline');
+  } else {
+    const ascii = String(node.name).replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(node.name)}`
+    );
+  }
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', inline ? 'private, max-age=3600' : 'private, no-store');
+
+  // 下载计数（预览不计入）
+  if (!inline) {
+    try { store.updateDriveNode(node.id, { downloads: (node.downloads || 0) + 1 }); } catch {}
+  }
+
+  const range = req.headers.range;
+  if (range) {
+    const m = /bytes=(\d*)-(\d*)/.exec(range);
+    let start = m && m[1] ? parseInt(m[1], 10) : 0;
+    let end = m && m[2] ? parseInt(m[2], 10) : st.size - 1;
+    if (isNaN(start) || start < 0) start = 0;
+    if (isNaN(end) || end >= st.size) end = st.size - 1;
+    if (start > end) return res.status(416).setHeader('Content-Range', `bytes */${st.size}`).end();
+    res.statusCode = 206;
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${st.size}`);
+    res.setHeader('Content-Length', end - start + 1);
+    return fs.createReadStream(full, { start, end }).pipe(res);
+  }
+  res.setHeader('Content-Length', st.size);
+  fs.createReadStream(full).pipe(res);
+});
+
+/** 重命名 / 移动 */
+app.put('/api/drive/node/:id', requireUser, requireDrive, (req, res) => {
+  const node = store.findDriveNode(req.params.id, req.user.account);
+  if (!node) return res.status(404).json({ error: '不存在' });
+  const patch = {};
+
+  if (req.body && req.body.name !== undefined) {
+    let name = drive.sanitizeName(req.body.name, node.name);
+    // 保持原扩展名：云盘里改错扩展名会导致下载后无法打开
+    const oldExt = drive.extOf(node.name);
+    if (node.type === 'file' && oldExt && drive.extOf(name) !== oldExt) {
+      name = drive.baseOf(name) + '.' + oldExt;
+    }
+    patch.name = drive.uniqueName(req.user.account, node.parent, name, node.id);
+  }
+
+  if (req.body && req.body.parent !== undefined) {
+    const parent = drive.normParent(req.user.account, req.body.parent);
+    if (parent === null) return res.status(400).json({ error: '目标文件夹不存在' });
+    // 防止把文件夹移进自己的子孙里（会形成环，导致树遍历死循环）
+    if (node.type === 'folder' && parent) {
+      const sub = store.driveSubtree(node.id).map((n) => n.id);
+      if (sub.includes(parent)) return res.status(400).json({ error: '不能把文件夹移动到它自己的子目录中' });
+    }
+    // 目标目录下重名自动改名
+    patch.parent = parent;
+    patch.name = drive.uniqueName(req.user.account, parent, patch.name || node.name, node.id);
+  }
+
+  const updated = store.updateDriveNode(node.id, patch);
+  res.json({ ok: true, node: drive.nodeView(updated) });
+});
+
+/** 删除（进回收站 / 永久删除） */
+app.delete('/api/drive/node/:id', requireUser, requireDrive, async (req, res) => {
+  const node = store.findDriveNode(req.params.id, req.user.account);
+  if (!node) return res.status(404).json({ error: '不存在' });
+
+  const hard = req.query.hard === '1';
+  const subtree = store.driveSubtree(node.id);
+
+  if (!hard) {
+    // 软删：整个子树一起进回收站
+    for (const n of subtree) {
+      store.updateDriveNode(n.id, { trashed: true, trashedAt: Date.now() });
+    }
+    return res.json({ ok: true, trashed: true, count: subtree.length, quota: drive.quotaView(req.user) });
+  }
+
+  // 硬删：先删物理文件，再删记录
+  for (const n of subtree) {
+    if (n.type === 'file' && n.file) {
+      const full = drive.resolveFile(n.file);
+      if (full) await drive.removeQuiet(full);
+      if (n.imgFile) {
+        const t = image.resolveThumb(n.imgFile);
+        if (t) await image.removeQuiet(t);
+      }
+    }
+  }
+  store.removeDriveNodes(subtree.map((n) => n.id));
+  // 相关分享一并作废
+  for (const n of subtree) {
+    const sh = store.findDriveShare({ token: '' });
+    const shares = (store.listDriveShares(req.user.account) || []).filter((s) => s.nodeId === n.id);
+    for (const s of shares) store.updateDriveShare(s.id, { revoked: true });
+  }
+  res.json({ ok: true, trashed: false, count: subtree.length, quota: drive.quotaView(req.user) });
+});
+
+/** 还原 / 清空回收站 */
+app.post('/api/drive/restore/:id', requireUser, requireDrive, (req, res) => {
+  const node = store.findDriveNode(req.params.id, req.user.account);
+  if (!node) return res.status(404).json({ error: '不存在' });
+  const subtree = store.driveSubtree(node.id);
+  for (const n of subtree) {
+    // 父目录若已不存在，还原到根目录，避免出现「孤儿节点」永远看不到
+    const parentOk = !n.parent || (store.findDriveNode(n.parent, req.user.account) && !store.findDriveNode(n.parent, req.user.account).trashed);
+    store.updateDriveNode(n.id, {
+      trashed: false,
+      trashedAt: 0,
+      ...(parentOk ? {} : { parent: '' }),
+    });
+  }
+  res.json({ ok: true, count: subtree.length });
+});
+
+app.post('/api/drive/trash/clear', requireUser, requireDrive, async (req, res) => {
+  const victims = store.driveNodes(req.user.account, { trashed: true });
+  const ids = [];
+  for (const n of victims) {
+    if (n.type === 'file' && n.file) {
+      const full = drive.resolveFile(n.file);
+      if (full) await drive.removeQuiet(full);
+      if (n.imgFile) {
+        const t = image.resolveThumb(n.imgFile);
+        if (t) await image.removeQuiet(t);
+      }
+    }
+    ids.push(n.id);
+  }
+  store.removeDriveNodes(ids);
+  res.json({ ok: true, count: ids.length, quota: drive.quotaView(req.user) });
+});
+
+/** 批量操作（删除 / 移动 / 还原） */
+app.post('/api/drive/batch', requireUser, requireDrive, async (req, res) => {
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 500) : [];
+  const action = String((req.body && req.body.action) || '');
+  if (!ids.length) return res.status(400).json({ error: '未选择任何项目' });
+
+  // 只处理属于自己且真实存在的节点
+  const nodes = ids.map((id) => store.findDriveNode(id, req.user.account)).filter(Boolean);
+  if (!nodes.length) return res.status(404).json({ error: '所选项目不存在' });
+
+  if (action === 'delete') {
+    const hard = !!(req.body && req.body.hard);
+    for (const n of nodes) {
+      const sub = store.driveSubtree(n.id);
+      if (hard) {
+        for (const x of sub) {
+          if (x.type === 'file' && x.file) {
+            const full = drive.resolveFile(x.file);
+            if (full) await drive.removeQuiet(full);
+          }
+        }
+        store.removeDriveNodes(sub.map((x) => x.id));
+      } else {
+        for (const x of sub) store.updateDriveNode(x.id, { trashed: true, trashedAt: Date.now() });
+      }
+    }
+    return res.json({ ok: true, count: nodes.length, quota: drive.quotaView(req.user) });
+  }
+
+  if (action === 'move') {
+    const parent = drive.normParent(req.user.account, req.body.parent);
+    if (parent === null) return res.status(400).json({ error: '目标文件夹不存在' });
+    let n = 0;
+    for (const node of nodes) {
+      // 同样要防止移进自己的子孙
+      if (node.type === 'folder' && parent) {
+        const sub = store.driveSubtree(node.id).map((x) => x.id);
+        if (sub.includes(parent)) continue;
+      }
+      store.updateDriveNode(node.id, {
+        parent,
+        name: drive.uniqueName(req.user.account, parent, node.name, node.id),
+      });
+      n++;
+    }
+    return res.json({ ok: true, count: n });
+  }
+
+  if (action === 'restore') {
+    let n = 0;
+    for (const node of nodes) {
+      for (const x of store.driveSubtree(node.id)) {
+        store.updateDriveNode(x.id, { trashed: false, trashedAt: 0 });
+        n++;
+      }
+    }
+    return res.json({ ok: true, count: n });
+  }
+
+  res.status(400).json({ error: '未知操作' });
+});
+
+/** 分享：创建 */
+app.post('/api/drive/share', requireUser, requireDrive, (req, res) => {
+  const { nodeId, password = '', expireDays = 0 } = req.body || {};
+  if (!nodeId) return res.status(400).json({ error: '缺少文件 id' });
+  const r = drive.createShare(req.user, nodeId, { password, expireDays });
+  if (!r.ok) return res.status(400).json({ error: r.reason });
+  res.json({ ok: true, share: r.share, reused: !!r.reused });
+});
+
+/** 分享：我的分享列表 */
+app.get('/api/drive/shares', requireUser, requireDrive, (req, res) => {
+  const list = store.listDriveShares(req.user.account).map((s) => {
+    const node = store.findDriveNode(s.nodeId);
+    return drive.shareView(s, node);
+  });
+  res.json({ list });
+});
+
+/** 分享：取消 */
+app.delete('/api/drive/share/:id', requireUser, requireDrive, (req, res) => {
+  const s = store.findDriveShare({ id: req.params.id });
+  if (!s || s.account !== req.user.account) return res.status(404).json({ error: '分享不存在' });
+  store.updateDriveShare(s.id, { revoked: true });
+  res.json({ ok: true });
+});
+
+/**
+ * 分享访问（公开接口，不需要登录）。
+ * GET    /api/share/:token          → 查看分享信息（含是否需要密码）
+ * POST   /api/share/:token/verify   → 提交提取码，换取访问凭证
+ * GET    /api/share/:token/file     → 下载文件（需已通过密码校验）
+ * GET    /api/share/:token/list     → 文件夹分享的目录列表
+ *
+ * 密码校验通过后发一个短期签名 cookie，避免每次请求都要带密码。
+ */
+function shareAckCookie(token) {
+  // 用服务端密钥签名，防止伪造 —— 直接复用 security 模块的哈希能力
+  return crypto.createHmac('sha256', 'ciyun-share').update(String(token)).digest('hex').slice(0, 32);
+}
+
+function shareAcked(req, token) {
+  const raw = req.cookies && req.cookies['cy_share'];
+  if (!raw) return false;
+  // ⚠️ Express 的 cookieParser 对值做 decodeURIComponent，但部分客户端
+  //    （curl/部分浏览器）把 ':' 存成 '%3A'，这里再解一次，避免
+  //    「验证通过了、下载仍说提取码不正确」。
+  let v = String(raw);
+  try { v = decodeURIComponent(v); } catch { /* 已是明文则忽略 */ }
+  const i = v.indexOf(':');
+  if (i < 0) return false;
+  const tk = v.slice(0, i);
+  const sig = v.slice(i + 1);
+  if (tk !== token || !sig) return false;
+  return sig === shareAckCookie(token);
+}
+
+app.get('/api/share/:token', (req, res) => {
+  const token = String(req.params.token || '');
+  const s = store.findDriveShare({ token });
+  if (!s) return res.status(404).json({ error: '分享不存在或已被取消' });
+  if (s.revoked) return res.status(410).json({ error: '该分享已被取消' });
+  if (s.expiresAt && s.expiresAt <= Date.now()) return res.status(410).json({ error: '该分享已过期' });
+
+  const node = store.findDriveNode(s.nodeId);
+  if (!node || node.trashed) return res.status(410).json({ error: '分享的文件已被删除' });
+
+  const needPwd = !!s.password && !shareAcked(req, token);
+  store.updateDriveShare(s.id, { views: (s.views || 0) + 1 });
+
+  res.json({
+    ok: true,
+    needPassword: needPwd,
+    share: {
+      token,
+      name: node.name,
+      type: node.type,
+      size: node.size || 0,
+      sizeText: drive.fmtSize(node.size || 0),
+      ext: node.ext || drive.extOf(node.name),
+      preview: drive.previewKind(node.ext || drive.extOf(node.name)),
+      owner: s.account,
+      expiresAt: s.expiresAt || 0,
+      createdAt: s.createdAt,
+      // 有密码且未验证通过时不泄漏内容
+      ...(needPwd ? {} : {
+        url: node.type === 'file' ? `/api/share/${token}/file` : '',
+        thumb: node.type === 'file' && node.imgFile ? `/api/share/${token}/thumb` : '',
+      }),
+    },
+  });
+});
+
+app.post('/api/share/:token/verify', (req, res) => {
+  const token = String(req.params.token || '');
+  const r = drive.accessShare(token, req.body && req.body.password);
+  if (!r.ok) {
+    const status = r.code === 'not_found' ? 404 : r.code === 'need_password' ? 401 : 403;
+    return res.status(status).json({ error: r.reason, code: r.code });
+  }
+  res.cookie('cy_share', `${token}:${shareAckCookie(token)}`, {
+    httpOnly: true, sameSite: 'lax', maxAge: 2 * 3600 * 1000, path: '/',
+  });
+  res.json({ ok: true });
+});
+
+app.get('/api/share/:token/file', (req, res) => {
+  const token = String(req.params.token || '');
+  const r = drive.accessShare(token, shareAcked(req, token) ? drive.SKIP_PASSWORD : (req.query.pwd || ''));
+  if (!r.ok) return res.status(r.code === 'not_found' ? 404 : 403).send(r.reason);
+  const node = r.node;
+  if (node.type !== 'file') return res.status(400).send('这是文件夹');
+
+  store.updateDriveShare(r.share.id, { downloads: (r.share.downloads || 0) + 1 });
+  streamDriveFile(req, res, node, { cache: 'private, max-age=600' });
+});
+
+/**
+ * 分享文件夹内的单个文件下载。
+ * 没有这个端点时，用户分享了一个文件夹，点进去只能看列表却下不了任何一个文件 ——
+ * 所以访问权限必须严格限定在「该分享根节点的子树」内。
+ */
+app.get('/api/share/:token/node/:id', (req, res) => {
+  const token = String(req.params.token || '');
+  const r = drive.accessShare(token, shareAcked(req, token) ? drive.SKIP_PASSWORD : (req.query.pwd || ''));
+  if (!r.ok) return res.status(r.code === 'not_found' ? 404 : 403).send(r.reason);
+  if (r.node.type !== 'folder') return res.status(400).send('这是文件，不是文件夹');
+
+  // 越权防线：目标节点必须属于该分享账户，且在该分享的子树内
+  const sub = new Set(store.driveSubtree(r.node.id).map((n) => n.id));
+  const target = store.getDriveNodesRaw().find((n) => n.id === req.params.id);
+  if (!target || target.account !== r.share.account || target.trashed) return res.status(404).send('文件不存在');
+  if (!sub.has(target.id)) return res.status(403).send('越权访问');
+  if (target.type !== 'file') return res.status(400).send('这是文件夹');
+
+  store.updateDriveShare(r.share.id, { downloads: (r.share.downloads || 0) + 1 });
+  streamDriveFile(req, res, target, { cache: 'private, max-age=600' });
+});
+
+/** 云盘文件落盘输出（含 Range 支持，供分享与直连共用） */
+function streamDriveFile(req, res, node, opt = {}) {
+  const full = drive.resolveFile(node.file);
+  if (!full) return res.status(404).send('bad file');
+  let st;
+  try { st = fs.statSync(full); } catch { return res.status(404).send('missing'); }
+
+  const ext = node.ext || drive.extOf(node.name);
+  const inline = req.query.inline === '1' && !!drive.previewKind(ext);
+  res.setHeader('Content-Type', node.mime || guessMime(ext));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (inline) {
+    res.setHeader('Content-Disposition', 'inline');
+  } else {
+    const ascii = String(node.name).replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(node.name)}`);
+  }
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', opt.cache || 'private, max-age=600');
+
+  const range = req.headers.range;
+  if (range) {
+    const m = /bytes=(\d*)-(\d*)/.exec(range);
+    let start = m && m[1] ? parseInt(m[1], 10) : 0;
+    let end = m && m[2] ? parseInt(m[2], 10) : st.size - 1;
+    if (isNaN(start) || start < 0) start = 0;
+    if (isNaN(end) || end >= st.size) end = st.size - 1;
+    if (end < start) { res.statusCode = 416; return res.end(); }
+    res.statusCode = 206;
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${st.size}`);
+    res.setHeader('Content-Length', end - start + 1);
+    return fs.createReadStream(full, { start, end }).pipe(res);
+  }
+  res.setHeader('Content-Length', st.size);
+  fs.createReadStream(full).pipe(res);
+}
+
+/** 分享内图片缩略图 */
+app.get('/api/share/:token/thumb', (req, res) => {
+  const token = String(req.params.token || '');
+  const r = drive.accessShare(token, shareAcked(req, token) ? drive.SKIP_PASSWORD : (req.query.pwd || ''));
+  if (!r.ok) return res.status(403).end();
+  if (!r.node.imgFile) return res.status(404).end();
+  const t = image.resolveThumb(r.node.imgFile);
+  if (!t) return res.status(404).end();
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  fs.createReadStream(t).pipe(res);
+});
+
+/** 文件夹分享的目录浏览 */
+app.get('/api/share/:token/list', (req, res) => {
+  const token = String(req.params.token || '');
+  const r = drive.accessShare(token, shareAcked(req, token) ? drive.SKIP_PASSWORD : (req.query.pwd || ''));
+  if (!r.ok) return res.status(403).json({ error: r.reason });
+  if (r.node.type !== 'folder') return res.status(400).json({ error: '这是文件，不是文件夹' });
+
+  const parent = String(req.query.parent || '');
+  // 只能浏览分享文件夹内部的目录
+  const sub = store.driveSubtree(r.node.id).map((n) => n.id);
+  if (parent && !sub.includes(parent)) return res.status(403).json({ error: '越权访问' });
+
+  const cur = parent || r.node.id;
+  const list = store.getDriveNodesRaw()
+    .filter((n) => n.account === r.share.account && !n.trashed && (n.parent || '') === cur)
+    .sort((a, b) => (a.type !== b.type ? (a.type === 'folder' ? -1 : 1) : (b.updatedAt || 0) - (a.updatedAt || 0)))
+    .map((n) => drive.nodeView(n));
+
+  res.json({
+    list,
+    parent: cur,
+    breadcrumb: drive.breadcrumb(r.share.account, cur),
+    rootName: r.node.name,
+  });
+});
+
+/** 云盘：把已有图片「存入相册」（云盘图片 → 相册，打通两个模块） */
+app.post('/api/drive/to-gallery', requireUser, requireDrive, (req, res) => {
+  const { nodeId } = req.body || {};
+  const node = store.findDriveNode(nodeId, req.user.account);
+  if (!node || node.type !== 'file') return res.status(404).json({ error: '文件不存在' });
+  if (!drive.isImageExt(node.ext || drive.extOf(node.name))) {
+    return res.status(400).json({ error: '只有图片可以存入相册' });
+  }
+  const rec = store.addImage({
+    file: node.file,
+    thumb: node.imgFile || '',
+    name: node.name,
+    account: req.user.account,
+    w: node.w, h: node.h,
+    size: node.size,
+    scene: 'gallery',
+    refType: 'drive',
+    refId: node.id,
+  });
+  res.json({ ok: true, image: image.imageView(rec) });
+});
+
+/* ============================================================
+ * 相册 API（个人图片空间）
+ * ============================================================ */
+
+/** 我的相册列表 */
+app.get('/api/gallery', requireUser, (req, res) => {
+  const cfg = store.settings.community || {};
+  if (cfg.galleryEnabled === false) return res.status(403).json({ error: '相册功能已关闭' });
+
+  const r = store.queryImages({
+    account: req.user.account,
+    scene: String(req.query.scene || ''),
+    page: req.query.page,
+    size: req.query.size,
+  });
+  const usage = store.imageUsage(req.user.account);
+
+  res.json({
+    list: r.list.filter((x) => x.status !== 'blocked').map((x) => ({
+      id: x.id,
+      ...image.imageView(x),
+      scene: x.scene,
+      refType: x.refType,
+      refId: x.refId,
+      status: x.status,
+      createdAt: x.createdAt,
+    })),
+    total: r.total,
+    page: r.page,
+    size: r.size,
+    usage,
+  });
+});
+
+/** 删除相册图片 */
+app.delete('/api/gallery/:id', requireUser, async (req, res) => {
+  const im = store.findImage(req.params.id);
+  if (!im) return res.status(404).json({ error: '图片不存在' });
+  const isOwner = im.account === req.user.account;
+  if (!isOwner && !req.admin) return res.status(403).json({ error: '无权删除' });
+
+  // 删除物理文件（原图 + 缩略图）
+  await image.removeImage(im.file);
+  store.deleteImage(im.id);
+  res.json({ ok: true, usage: store.imageUsage(im.account) });
+});
+
+/** 批量删除相册图片 */
+app.post('/api/gallery/batch-delete', requireUser, async (req, res) => {
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 200) : [];
+  if (!ids.length) return res.status(400).json({ error: '未选择图片' });
+  let n = 0;
+  for (const id of ids) {
+    const im = store.findImage(id);
+    if (!im) continue;
+    if (im.account !== req.user.account && !req.admin) continue;
+    await image.removeImage(im.file);
+    store.deleteImage(im.id);
+    n++;
+  }
+  res.json({ ok: true, count: n, usage: store.imageUsage(req.user.account) });
+});
+
+/* ============================================================
+ * 短剧封面自定义上传
+ * ============================================================ */
+/** 把已上传的图片设为短视频封面 */
+app.post('/api/shorts/:id/cover', requireUser, (req, res) => {
+  const s = store.findShort(req.params.id);
+  if (!s) return res.status(404).json({ error: '视频不存在' });
+  if (s.account !== req.user.account && !req.admin) return res.status(403).json({ error: '无权修改' });
+
+  const { file } = req.body || {};
+  if (!file) return res.status(400).json({ error: '缺少图片' });
+  const safe = path.basename(String(file));
+  const rec = store.findImageByFile(safe);
+  if (!rec) return res.status(404).json({ error: '图片不存在，请先上传' });
+  if (rec.account !== req.user.account && !req.admin) return res.status(403).json({ error: '不能使用他人的图片' });
+
+  s.cover = `/api/image/${rec.file}`;
+  store.upsertShort(s);
+  res.json({ ok: true, cover: s.cover });
 });
 
 /* ============================================================

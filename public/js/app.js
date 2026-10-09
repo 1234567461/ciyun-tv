@@ -13,6 +13,8 @@ import { renderFamilyPage } from './family.js';
 import { renderVipPage } from './vip.js';
 import { renderSocialPage } from './social.js';
 import { renderShortsPage, renderShortDetail, renderUploadPage } from './shorts.js';
+import { renderGalleryPage } from './gallery.js';
+import { renderDrivePage, renderSharePage } from './drive.js';
 
 const state = {
   site: null,
@@ -86,6 +88,9 @@ function renderHeader() {
     { href: '#/resource?type=movie', text: '电影', match: ['/resource'] },
     { href: '#/live', text: '电视直播', match: ['/live'] },
     { href: '#/shorts?view=grid', text: '短视频', match: ['/shorts'] },
+    { href: '#/live', text: '电视直播', match: ['/live'] },
+    { href: '#/gallery', text: '相册', match: ['/gallery'] },
+    { href: '#/drive', text: '云盘', match: ['/drive'] },
     { href: '#/family', text: '家庭共享', match: ['/family'] },
     { href: '#/category/news', text: '新闻', match: ['/category/news'] },
     { href: '#/category/documentary', text: '纪录片', match: ['/category/documentary'] },
@@ -229,6 +234,9 @@ function openDrawer(navMap) {
     ua.onclick = () => { closeDrawer(); go('/profile'); };
     userBox.appendChild(ua);
     userBox.appendChild(h('a', { class: 'drawer-link', href: '#/profile', text: '👤 个人中心', onclick: () => setTimeout(closeDrawer, 0) }));
+    userBox.appendChild(h('a', { class: 'drawer-link', href: '#/gallery', text: '🖼️ 我的相册', onclick: () => setTimeout(closeDrawer, 0) }));
+    userBox.appendChild(h('a', { class: 'drawer-link', href: '#/drive', text: '☁️ 我的云盘', onclick: () => setTimeout(closeDrawer, 0) }));
+    userBox.appendChild(h('a', { class: 'drawer-link', href: '#/social', text: '💌 我的私信', onclick: () => setTimeout(closeDrawer, 0) }));
     userBox.appendChild(h('button', {
       class: 'drawer-link drawer-logout',
       html: '🚪 退出登录',
@@ -363,6 +371,8 @@ function buildUserArea() {
     h('a', { href: '#/social?tab=friends', html: '👥<span>好友</span>', onclick: () => close() }),
     h('a', { href: '#/social?tab=requests', html: '📨<span>好友申请</span>', onclick: () => close() }),
     h('a', { href: '#/social', html: '💌<span>我的私信</span>', onclick: () => close() }),
+    h('a', { href: '#/gallery', html: '🖼️<span>我的相册</span>', onclick: () => close() }),
+    h('a', { href: '#/drive', html: '☁️<span>我的云盘</span>', onclick: () => close() }),
     h('a', { href: '#/fav', html: '⭐<span>我的收藏</span>', onclick: () => close() }),
     h('a', { href: '#/follows', html: '🔔<span>我的追剧</span>', onclick: () => close() }),
     h('a', { href: '#/history', html: '🕘<span>观看历史</span>', onclick: () => close() }),
@@ -464,6 +474,10 @@ async function route() {
     }
     if (seg[0] === 'join') return pageJoin(root, params.get('code') || '');
     if (seg[0] === 'u') return pageUserProfile(root, seg[1]);
+    if (seg[0] === 'gallery') return renderGalleryPage(root);
+    if (seg[0] === 'drive') return renderDrivePage(root);
+    // 分享访问页：链接形如 /#/s/<token>，未登录也能打开
+    if (seg[0] === 's' && seg[1]) return renderSharePage(root, seg[1]);
     return page404(root);
   } catch (e) {
     console.error(e);

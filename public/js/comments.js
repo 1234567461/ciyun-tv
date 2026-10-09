@@ -4,6 +4,7 @@
 
 import { h, api, relTime, toast } from './util.js';
 import { auth, avatarEl } from './auth.js';
+import { imagePicker, imageGrid } from './media.js';
 
 const ICON_LIKE =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 10v11H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3zm0 0l4.5-8a2.5 2.5 0 0 1 2.5 2.5V9h5a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 19.6 20H7"/></svg>';
@@ -19,7 +20,7 @@ const ICON_DEL =
  */
 export function mountComments(host, opts) {
   const { targetType = 'video', targetId, maxLen = 500 } = opts;
-  const state = { page: 1, size: 10, total: 0, totalRoots: 0, replyTo: null };
+  const state = { page: 1, size: 10, total: 0, totalRoots: 0, replyTo: null, imageEnabled: false, maxImages: 9 };
 
   host.innerHTML = '';
   host.className = 'comments-wrap';
@@ -38,6 +39,8 @@ export function mountComments(host, opts) {
       const d = await api(`/api/comments?type=${targetType}&id=${encodeURIComponent(targetId)}&page=${state.page}&size=${state.size}`);
       state.total = d.total;
       state.totalRoots = d.totalRoots;
+      state.imageEnabled = !!d.imageEnabled;
+      state.maxImages = Number(d.maxImages) || 9;
       head.querySelector('.cnt').textContent = d.total ? `${d.total} 条评论` : '还没有评论';
 
       if (reset) listBox.innerHTML = '';
@@ -88,7 +91,7 @@ export function mountComments(host, opts) {
     }
     const ta = h('textarea', {
       class: 'cm-textarea',
-      placeholder: '友善发言，理性讨论…',
+      placeholder: state.imageEnabled ? '友善发言，理性讨论…（可粘贴或拖入图片）' : '友善发言，理性讨论…',
       maxlength: String(maxLen),
       oninput: () => {
         const n = ta.value.length;
@@ -99,20 +102,28 @@ export function mountComments(host, opts) {
     });
     const cnt = h('span', { class: 'cm-count', text: '0 / ' + maxLen });
 
+    // 图片选择器（开启时才创建，避免不需要的元素占位）
+    const picker = state.imageEnabled
+      ? imagePicker({ scene: 'comment', max: state.maxImages })
+      : null;
+
     const submit = async () => {
       const content = ta.value.trim();
-      if (!content) return toast('请先输入内容', 'error');
-      if (content.length < 2) return toast('评论至少 2 个字', 'error');
+      const images = picker ? picker.attachments : [];
+      // 与后端一致：有图时允许纯图片，无图时必须写字
+      if (!content && !images.length) return toast('请先输入内容或选择图片', 'error');
+      if (content && content.length < 2 && !images.length) return toast('评论至少 2 个字', 'error');
       btn.disabled = true;
       btn.textContent = '发表中…';
       try {
         const r = await api('/api/comments', {
           method: 'POST',
-          body: { targetType, targetId, content },
+          body: { targetType, targetId, content, attachments: images },
         });
         toast(r.message || '发表成功', 'success');
         ta.value = '';
         cnt.textContent = '0 / ' + maxLen;
+        if (picker) picker.clear();
         await load(true);
       } catch (e) {
         toast(e.message || '发表失败', 'error');
@@ -129,13 +140,23 @@ export function mountComments(host, opts) {
         avatarEl(auth.user, 'sm'),
         h('div', { class: 'cm-editor-body' }, [
           ta,
+          picker ? picker.strip : null,
           h('div', { class: 'cm-tools' }, [
-            h('span', { style: { fontSize: '12px', color: 'var(--text-mute)' }, text: 'Ctrl + Enter 快速发表' }),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '9px' } }, [
+              picker ? picker.btn : null,
+              h('span', { style: { fontSize: '12px', color: 'var(--text-mute)' }, text: 'Ctrl + Enter 快速发表' }),
+            ]),
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } }, [cnt, btn]),
           ]),
         ]),
       ])
     );
+
+    // 粘贴发图 + 拖拽发图
+    if (picker) {
+      ta.addEventListener('paste', picker.onPaste);
+      picker.bindDrop(editorBox.querySelector('.cm-editor'));
+    }
   }
 
   /* -------------------------- 单条评论 -------------------------- */
@@ -197,6 +218,8 @@ export function mountComments(host, opts) {
           h('span', { class: 'cm-time', text: relTime(c.createdAt) }),
         ]),
         h('div', { class: 'cm-text' + (deleted ? ' deleted' : ''), text: deleted ? '该评论已删除' : c.content }),
+        // 图片九宫格（旧数据没有 images 字段，imageGrid 会自行处理空值）
+        !deleted && c.images && c.images.length ? imageGrid(c.images) : null,
         c.status === 'pending' ? h('div', { class: 'cm-pending', text: '⏳ 待审核，通过后公开显示' }) : null,
         acts,
       ]),
@@ -227,42 +250,65 @@ export function mountComments(host, opts) {
     slot.innerHTML = '';
     slot.dataset.open = '1';
 
-    const ta = h('textarea', { class: 'cm-textarea', placeholder: '回复 @' + (c.nickname || '游客') + '：', maxlength: String(maxLen) });
+    const ta = h('textarea', {
+      class: 'cm-textarea',
+      placeholder: '回复 @' + (c.nickname || '游客') + '：' + (state.imageEnabled ? '（可粘贴或拖入图片）' : ''),
+      maxlength: String(maxLen),
+      onkeydown: (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') send(); },
+    });
+    const picker = state.imageEnabled
+      ? imagePicker({ scene: 'comment', max: state.maxImages })
+      : null;
+
     let submitting = false;
     const send = async () => {
       const content = ta.value.trim();
-      if (!content) return toast('请输入回复内容', 'error');
+      const images = picker ? picker.attachments : [];
+      // 与后端 checkContent 一致：纯图片可发，纯文字需 ≥2 字
+      if (!content && !images.length) return toast('请输入回复内容或选择图片', 'error');
+      if (content && content.length < 2 && !images.length) return toast('回复至少 2 个字', 'error');
       if (submitting) return;
       submitting = true;
       sendBtn.disabled = true;
       try {
-        await api('/api/comments', { method: 'POST', body: { targetType, targetId, content, parentId: c.id } });
+        await api('/api/comments', {
+          method: 'POST',
+          body: { targetType, targetId, content, parentId: c.id, attachments: images },
+        });
         toast('回复成功', 'success');
         await load(true);
       } catch (e) {
         toast(e.message, 'error');
-      } finally {
         submitting = false;
         sendBtn.disabled = false;
       }
     };
     const sendBtn = h('button', { class: 'btn btn-primary btn-sm', text: '回复', onclick: send });
 
+    const close = () => { slot.innerHTML = ''; slot.dataset.open = '0'; };
+
     slot.appendChild(
       h('div', { class: 'cm-replybox' }, [
         avatarEl(auth.user, 'sm'),
         h('div', { style: { flex: '1', minWidth: '0' } }, [
           ta,
+          picker ? picker.strip : null,
           h('div', { class: 'cm-tools' }, [
-            h('span', { style: { fontSize: '11.5px', color: 'var(--text-mute)' }, text: '' }),
+            picker ? picker.btn : h('span', { style: { fontSize: '11.5px', color: 'var(--text-mute)' }, text: '' }),
             h('div', { style: { display: 'flex', gap: '8px' } }, [
-              h('button', { class: 'btn btn-ghost btn-sm', text: '取消', onclick: () => { slot.innerHTML = ''; slot.dataset.open = '0'; } }),
+              h('button', { class: 'btn btn-ghost btn-sm', text: '取消', onclick: close }),
               sendBtn,
             ]),
           ]),
         ]),
       ])
     );
+
+    // 粘贴发图 + 拖拽发图
+    if (picker) {
+      ta.addEventListener('paste', picker.onPaste);
+      picker.bindDrop(slot.querySelector('.cm-replybox'));
+    }
     ta.focus();
   }
 
